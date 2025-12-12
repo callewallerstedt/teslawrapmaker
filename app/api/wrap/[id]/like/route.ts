@@ -1,23 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { likeWrap, hasUserLikedWrap } from '@/lib/db'
+import { toggleWrapLike, checkUserLiked } from '@/lib/likes'
 
 // Get client IP address
 function getClientIP(request: NextRequest): string {
-  // Try various headers for IP (handles proxies, load balancers, etc.)
   const forwarded = request.headers.get('x-forwarded-for')
   if (forwarded) {
     return forwarded.split(',')[0].trim()
   }
-  
+
   const realIP = request.headers.get('x-real-ip')
   if (realIP) {
     return realIP
   }
-  
-  // Fallback to connection remote address
-  return request.ip || 'unknown'
+
+  return request.ip || '127.0.0.1'
 }
 
+// POST /api/wrap/[id]/like - Toggle like status
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -25,28 +24,43 @@ export async function POST(
   try {
     const wrapId = params.id
     const clientIP = getClientIP(request)
-    
-    // Check if user has already liked this wrap
-    const alreadyLiked = await hasUserLikedWrap(wrapId, clientIP)
-    
-    if (alreadyLiked) {
+
+    const result = await toggleWrapLike(wrapId, clientIP)
+
+    if (!result.success) {
       return NextResponse.json(
-        { error: 'You have already liked this wrap', alreadyLiked: true },
-        { status: 400 }
+        { error: result.error || 'Failed to toggle like' },
+        { status: 500 }
       )
     }
-    
-    // Like the wrap
-    const wrap = await likeWrap(wrapId, clientIP)
-    if (!wrap) {
-      return NextResponse.json({ error: 'Wrap not found' }, { status: 404 })
-    }
-    
-    // Return updated wrap data
-    return NextResponse.json({ likes: wrap.likes, liked: true })
+
+    return NextResponse.json({
+      liked: result.liked,
+      likes: result.likes
+    })
   } catch (error) {
-    console.error('Like error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('Like API error:', error)
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
   }
 }
 
+// GET /api/wrap/[id]/like - Check if user has liked
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const wrapId = params.id
+    const clientIP = getClientIP(request)
+
+    const liked = await checkUserLiked(wrapId, clientIP)
+
+    return NextResponse.json({ liked })
+  } catch (error) {
+    console.error('Check like API error:', error)
+    return NextResponse.json({ liked: false })
+  }
+}

@@ -5,3 +5,7 @@ ALTER TABLE wraps
 ADD COLUMN IF NOT EXISTS description TEXT,
 ADD COLUMN IF NOT EXISTS username TEXT;
 
+
+
+
+

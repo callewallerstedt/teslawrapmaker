@@ -224,6 +224,18 @@ export default function LayerSidebar({
                   </button>
                 </div>
                 <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-10 h-10 rounded overflow-hidden bg-[#1a1a1a] border border-[#2a2a2a] flex items-center justify-center">
+                      <img
+                        src={layer.imageUrl}
+                        alt={`Layer ${index + 1}`}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <span className="text-[11px] text-[#a0a0a0] truncate">
+                      {layer.imageUrl.startsWith('data:') ? 'Pasted / uploaded image' : layer.imageUrl}
+                    </span>
+                  </div>
                   <div>
                     <div className="flex justify-between items-center mb-1">
                       <label className="text-xs text-[#a0a0a0] font-light">Opacity</label>
@@ -250,4 +262,3 @@ export default function LayerSidebar({
     </div>
   )
 }
-

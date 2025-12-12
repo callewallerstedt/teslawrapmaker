@@ -24,8 +24,8 @@ export interface Wrap {
   textureUrl: string
   previewRenderUrl?: string
   title: string
-  description?: string
-  username?: string
+  description?: string // Not stored in database
+  username?: string // Stored in database, defaults to 'user'
   likes: number
   createdAt: string
 }

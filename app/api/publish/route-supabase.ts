@@ -8,6 +8,7 @@ export async function POST(request: NextRequest) {
     const title = formData.get('title') as string
     const carModelId = formData.get('carModelId') as string
     const textureFile = formData.get('texture') as File
+    const username = (formData.get('username') as string)?.trim() || 'user'
 
     if (!title || !carModelId || !textureFile) {
       return NextResponse.json(
@@ -53,6 +54,7 @@ export async function POST(request: NextRequest) {
       carModelId,
       textureUrl,
       title,
+      username,
     })
 
     return NextResponse.json(wrap)
@@ -61,4 +63,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Publish failed' }, { status: 500 })
   }
 }
+
+
+
+
 

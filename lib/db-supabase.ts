@@ -135,6 +135,7 @@ export async function getWraps(): Promise<Wrap[]> {
     textureUrl: row.texture_url,
     previewRenderUrl: row.preview_render_url,
     title: row.title,
+    username: row.username || 'user',
     likes: row.likes || 0,
     createdAt: row.created_at,
   }))
@@ -162,6 +163,7 @@ export async function getWrap(id: string): Promise<Wrap | null> {
     textureUrl: data.texture_url,
     previewRenderUrl: data.preview_render_url,
     title: data.title,
+    username: data.username || 'user',
     likes: data.likes || 0,
     createdAt: data.created_at,
   }
@@ -176,6 +178,7 @@ export async function createWrap(wrap: Omit<Wrap, 'id' | 'createdAt' | 'likes'>)
       texture_url: wrap.textureUrl,
       preview_render_url: wrap.previewRenderUrl,
       title: wrap.title,
+      username: wrap.username || 'user',
       author_id: wrap.authorId || null,
     })
     .select()
@@ -233,4 +236,8 @@ export async function likeWrap(id: string): Promise<Wrap | null> {
     createdAt: data.created_at,
   }
 }
+
+
+
+
 

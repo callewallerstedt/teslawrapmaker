@@ -1,67 +1,82 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Wrap } from '@/lib/types'
+import Link from 'next/link'
+import type { Wrap, CarModel } from '@/lib/types'
+import Navigation from '@/components/Navigation'
 
 export default function ExplorePage() {
   const router = useRouter()
   const [wraps, setWraps] = useState<Wrap[]>([])
+  const [carModels, setCarModels] = useState<CarModel[]>([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedModelId, setSelectedModelId] = useState('')
+  const [sortBy, setSortBy] = useState<'random' | 'most-liked' | 'latest'>('latest')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    async function loadWraps() {
+    async function loadData() {
       try {
-        const response = await fetch('/api/wraps')
-        if (response.ok) {
-          const data = await response.json()
-          setWraps(data)
+        // Fetch wraps via API so the server-side DB helper is used
+        const wrapsRes = await fetch('/api/wraps')
+        if (wrapsRes.ok) {
+          const wrapsData: Wrap[] = await wrapsRes.json()
+          setWraps(wrapsData)
+        } else {
+          console.error('Failed to fetch wraps:', wrapsRes.status, wrapsRes.statusText)
+        }
+
+        // Fetch car models via API (static from public folder)
+        const modelsRes = await fetch('/api/car-models')
+        if (modelsRes.ok) {
+          const modelsData: CarModel[] = await modelsRes.json()
+          setCarModels(modelsData)
+        } else {
+          console.error('Failed to fetch car models:', modelsRes.status, modelsRes.statusText)
         }
       } catch (error) {
-        console.error('Failed to load wraps:', error)
+        console.error('Failed to load explore data:', error)
       } finally {
         setLoading(false)
       }
     }
-    loadWraps()
+    loadData()
   }, [])
 
-  const filteredWraps = wraps.filter((wrap) =>
-    wrap.title.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const carModelNameById = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const model of carModels) {
+      map[model.id] = model.name
+    }
+    return map
+  }, [carModels])
+
+  const filteredWraps = (() => {
+    // First filter
+    const filtered = wraps.filter((wrap) => {
+      const matchesSearch = wrap.title.toLowerCase().includes(searchQuery.toLowerCase())
+      const matchesModel = !selectedModelId || wrap.carModelId === selectedModelId
+      return matchesSearch && matchesModel
+    })
+
+    // Then sort
+    switch (sortBy) {
+      case 'random':
+        return [...filtered].sort(() => Math.random() - 0.5)
+      case 'most-liked':
+        return [...filtered].sort((a, b) => (b.likes || 0) - (a.likes || 0))
+      case 'latest':
+      default:
+        return [...filtered].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    }
+  })()
+
+  console.log('Filtered wraps:', filteredWraps.length, 'out of', wraps.length)
 
   return (
     <div className="min-h-screen bg-[#1a1a1a]">
-      <nav className="border-b border-[#2a2a2a] bg-transparent backdrop-blur-sm">
-        <div className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-6">
-          <div className="flex justify-between items-center h-12">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => router.push('/')}
-                className="text-xl font-semibold text-[#ededed] hover:text-[#ededed] transition-colors tracking-tight"
-              >
-                TeslaWrapMaker
-              </button>
-              <button
-                onClick={() => router.push('/explore')}
-                className="text-sm text-[#a0a0a0] hover:text-[#ededed] transition-colors font-medium"
-              >
-                Explore
-              </button>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => router.push('/')}
-                className="px-4 py-2 text-sm font-medium text-[#ededed] rounded border border-[#2a2a2a] bg-[#ededed]/[0.12] hover:bg-[#ededed]/[0.18] hover:border-[#3a3a3a] transition-all"
-              >
-                Create Your Own Wrap
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
+      <Navigation currentPath="/explore" />
 
       <main className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-6 py-8">
         <div className="mb-8">
@@ -69,9 +84,9 @@ export default function ExplorePage() {
           <p className="text-[#a0a0a0] font-light">Browse wraps created by the community</p>
         </div>
 
-        {/* Search Bar */}
-        <div className="mb-8 flex justify-center">
-          <div className="relative max-w-md w-full">
+        {/* Search + Filters */}
+        <div className="mb-8 flex flex-col lg:flex-row lg:items-center gap-4">
+          <div className="relative flex-1 max-w-md">
             <svg
               className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-[#707070]"
               fill="none"
@@ -92,6 +107,59 @@ export default function ExplorePage() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 bg-[#ededed]/[0.12] border border-[#2a2a2a] rounded text-[#ededed] placeholder-[#707070] focus:outline-none focus:border-[#3a3a3a] focus:bg-[#ededed]/[0.18] transition-all font-light"
             />
+          </div>
+
+          <div className="flex gap-3">
+            <div className="w-48">
+              <div className="relative">
+                <select
+                  value={selectedModelId}
+                  onChange={(e) => setSelectedModelId(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-transparent border border-[#2a2a2a] rounded-lg text-[#ededed] focus:outline-none focus:border-[#3a3a3a] focus:bg-[#ededed]/[0.05] transition-all font-light appearance-none pr-8 cursor-pointer hover:border-[#3a3a3a]"
+                >
+                  <option value="" className="bg-[#1a1a1a] text-[#ededed]">All models</option>
+                  {carModels.map((model) => (
+                    <option key={model.id} value={model.id} className="bg-[#1a1a1a] text-[#ededed]">
+                      {model.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none">
+                  <svg
+                    className="w-4 h-4 text-[#707070]"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <div className="w-40">
+              <div className="relative">
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as 'random' | 'most-liked' | 'latest')}
+                  className="w-full px-4 py-2.5 bg-transparent border border-[#2a2a2a] rounded-lg text-[#ededed] focus:outline-none focus:border-[#3a3a3a] focus:bg-[#ededed]/[0.05] transition-all font-light appearance-none pr-8 cursor-pointer hover:border-[#3a3a3a]"
+                >
+                  <option value="latest" className="bg-[#1a1a1a] text-[#ededed]">Latest</option>
+                  <option value="most-liked" className="bg-[#1a1a1a] text-[#ededed]">Most Liked</option>
+                  <option value="random" className="bg-[#1a1a1a] text-[#ededed]">Random</option>
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none">
+                  <svg
+                    className="w-4 h-4 text-[#707070]"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                  </svg>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -141,6 +209,7 @@ export default function ExplorePage() {
                       alt={wrap.title}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       onError={(e) => {
+                        console.error('Image failed to load:', wrap.textureUrl, e)
                         // Fallback if image fails to load
                         const target = e.target as HTMLImageElement
                         target.style.display = 'none'
@@ -170,11 +239,13 @@ export default function ExplorePage() {
                   <h3 className="text-base font-medium text-[#ededed] mb-1 tracking-tight line-clamp-2 group-hover:text-[#ededed] transition-colors">
                     {wrap.title}
                   </h3>
+                  {carModelNameById[wrap.carModelId] && (
+                    <p className="text-xs text-[#707070] mb-1 font-light">
+                      {carModelNameById[wrap.carModelId]}
+                    </p>
+                  )}
                   {wrap.username && (
                     <p className="text-xs text-[#707070] mb-2 font-light">by {wrap.username}</p>
-                  )}
-                  {wrap.description && (
-                    <p className="text-xs text-[#a0a0a0] mb-2 font-light line-clamp-2">{wrap.description}</p>
                   )}
                   <div className="flex items-center gap-3 text-xs text-[#707070] font-light">
                     <div className="flex items-center gap-1">
@@ -188,7 +259,7 @@ export default function ExplorePage() {
                       </svg>
                       <span>{wrap.likes}</span>
                     </div>
-                    <span>•</span>
+                    <span>·</span>
                     <span>{new Date(wrap.createdAt).toLocaleDateString()}</span>
                   </div>
                 </div>
@@ -200,4 +271,3 @@ export default function ExplorePage() {
     </div>
   )
 }
-

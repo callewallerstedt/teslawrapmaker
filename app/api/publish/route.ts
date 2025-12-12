@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createWrap } from '@/lib/db'
-import { supabase } from '@/lib/supabase'
+import { supabase, supabaseAdmin } from '@/lib/supabase'
 import sharp from 'sharp'
 
 export async function POST(request: NextRequest) {
@@ -82,19 +81,44 @@ export async function POST(request: NextRequest) {
       textureUrl = `data:image/png;base64,${base64}`
     }
 
-    const wrap = await createWrap({
-      carModelId,
-      textureUrl,
-      title,
-      description: description || undefined,
-      username: username || undefined,
-    })
+    // Save wrap row directly into Supabase table
+    const client = supabaseAdmin || supabase
 
-    return NextResponse.json(wrap)
+    const { data, error } = await client
+      .from('wraps')
+      .insert({
+        car_model_id: carModelId,
+        texture_url: textureUrl,
+        preview_render_url: null,
+        title,
+        description: description || null,
+        username: username || null,
+        // likes and created_at use defaults
+      })
+      .select('*')
+      .single()
+
+    if (error) {
+      console.error('Error creating wrap row:', error)
+      return NextResponse.json(
+        { error: 'Failed to save wrap', details: error.message },
+        { status: 500 }
+      )
+    }
+
+    return NextResponse.json({
+      id: data.id,
+      carModelId: data.car_model_id,
+      textureUrl: data.texture_url,
+      previewRenderUrl: data.preview_render_url ?? undefined,
+      title: data.title,
+      description: data.description ?? undefined,
+      username: data.username ?? undefined,
+      likes: data.likes || 0,
+      createdAt: data.created_at,
+    })
   } catch (error) {
     console.error('Publish error:', error)
     return NextResponse.json({ error: 'Publish failed' }, { status: 500 })
   }
 }
-
-

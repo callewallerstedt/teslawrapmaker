@@ -24,3 +24,7 @@ CREATE POLICY "Anyone can like wraps" ON wrap_likes
 CREATE POLICY "Anyone can view likes" ON wrap_likes
   FOR SELECT USING (true);
 
+
+
+
+

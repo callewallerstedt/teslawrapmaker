@@ -54,7 +54,6 @@ export default function DesignPage() {
     if (!carModel || layers.length === 0) return
 
     try {
-      // Load template to get its dimensions
       const templateImg = new Image()
       templateImg.crossOrigin = 'anonymous'
       templateImg.src = carModel.uvTextureUrl
@@ -64,83 +63,43 @@ export default function DesignPage() {
         templateImg.onerror = reject
       })
 
-      const templateWidth = templateImg.width
-      const templateHeight = templateImg.height
+      const templateWidth = templateImg.width || 1024
+      const templateHeight = templateImg.height || 1024
 
-      // Create canvas at template resolution
+      // Render at original template resolution (e.g. 1024x1024)
       const canvas = document.createElement('canvas')
       canvas.width = templateWidth
       canvas.height = templateHeight
       const ctx = canvas.getContext('2d')
       if (!ctx) return
 
-      // Draw base color first if provided (replace non-transparent template pixels)
+      ctx.imageSmoothingEnabled = true
+      if ('imageSmoothingQuality' in ctx) {
+        // @ts-ignore
+        ctx.imageSmoothingQuality = 'high'
+      }
+
+      // Draw base: either template tinted with base color, or raw template
       if (baseColor) {
-        // Create a temporary canvas to process template with base color
-        const baseCanvas = document.createElement('canvas')
-        baseCanvas.width = templateWidth
-        baseCanvas.height = templateHeight
-        const baseCtx = baseCanvas.getContext('2d')
-        if (baseCtx) {
-          // Enable smoothing for smooth edges
-          baseCtx.imageSmoothingEnabled = true
-          if ('imageSmoothingQuality' in baseCtx) {
-            (baseCtx as any).imageSmoothingQuality = 'high'
-          }
-          
-          // Draw template
-          baseCtx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-          
-          // Get image data and replace non-transparent pixels with base color
-          const imageData = baseCtx.getImageData(0, 0, templateWidth, templateHeight)
-          const data = imageData.data
-          
-          // Convert hex color to RGB
-          let hex = baseColor.replace('#', '')
-          if (hex.length === 3) {
-            hex = hex.split('').map(char => char + char).join('')
-          }
-          const r = parseInt(hex.substring(0, 2), 16)
-          const g = parseInt(hex.substring(2, 4), 16)
-          const b = parseInt(hex.substring(4, 6), 16)
-          
-          // Use threshold to make base color pixels hard (no semi-transparency)
-          const TH = 250 // tune: 240-254, higher = stricter (removes more edge pixels)
-          
-          for (let i = 0; i < data.length; i += 4) {
-            const a = data[i + 3]
-            if (a >= TH) {
-              // Replace fully opaque pixels with base color (hard edges, no semi-transparency)
-              data[i] = r
-              data[i + 1] = g
-              data[i + 2] = b
-              data[i + 3] = 255
-            } else {
-              // Make semi-transparent edge pixels fully transparent
-              data[i + 3] = 0
-            }
-          }
-          
-          baseCtx.putImageData(imageData, 0, 0)
-          
-          // Draw processed base color onto main canvas
-          ctx.drawImage(baseCanvas, 0, 0, templateWidth, templateHeight)
-        }
+        ctx.save()
+        ctx.fillStyle = baseColor
+        ctx.fillRect(0, 0, templateWidth, templateHeight)
+        ctx.globalCompositeOperation = 'destination-in'
+        ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
+        ctx.restore()
       } else {
-        // Draw template as background if no base color
         ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
       }
 
-      // Calculate scale factor from canvas display to template
-      const canvasWidth = 960
-      const canvasHeight = 640
-      const canvasScale = Math.min(canvasWidth / templateWidth, canvasHeight / templateHeight)
-      const templateDisplayWidth = templateWidth * canvasScale
-      const templateDisplayHeight = templateHeight * canvasScale
-      const templateOffsetX = (canvasWidth - templateDisplayWidth) / 2
-      const templateOffsetY = (canvasHeight - templateDisplayHeight) / 2
+      // Map from editor canvas (960x640) coordinates to template coordinates
+      const editorWidth = 960
+      const editorHeight = 640
+      const scale = Math.min(editorWidth / templateWidth, editorHeight / templateHeight)
+      const displayWidth = templateWidth * scale
+      const displayHeight = templateHeight * scale
+      const offsetX = (editorWidth - displayWidth) / 2
+      const offsetY = (editorHeight - displayHeight) / 2
 
-      // Draw each layer with mask applied
       for (const layer of layers) {
         const layerImg = new Image()
         layerImg.crossOrigin = 'anonymous'
@@ -151,58 +110,35 @@ export default function DesignPage() {
           layerImg.onerror = reject
         })
 
-        // Calculate position and scale in template coordinates
-        const layerX = (layer.x - templateOffsetX) / canvasScale
-        const layerY = (layer.y - templateOffsetY) / canvasScale
-        const layerWidth = (layerImg.width * layer.scaleX) / canvasScale
-        const layerHeight = (layerImg.height * layer.scaleY) / canvasScale
+        // layer.x / layer.y are the CENTER coordinates in editor space (originX/Y: 'center')
+        const centerX = (layer.x - offsetX) / scale
+        const centerY = (layer.y - offsetY) / scale
+        const drawWidth = (layerImg.width * layer.scaleX) / scale
+        const drawHeight = (layerImg.height * layer.scaleY) / scale
 
-        // Create temporary canvas for this layer
-        const layerCanvas = document.createElement('canvas')
-        layerCanvas.width = templateWidth
-        layerCanvas.height = templateHeight
-        const layerCtx = layerCanvas.getContext('2d', { willReadFrequently: true })
-        if (!layerCtx) continue
-
-        // Draw layer with transformations
-        layerCtx.save()
-        layerCtx.globalAlpha = layer.opacity
-        
-        if (layer.rotation !== 0) {
-          layerCtx.translate(layerX + layerWidth / 2, layerY + layerHeight / 2)
-          layerCtx.rotate((layer.rotation * Math.PI) / 180)
-          layerCtx.translate(-layerWidth / 2, -layerHeight / 2)
-        } else {
-          layerCtx.translate(layerX, layerY)
-        }
-
-        layerCtx.drawImage(layerImg, 0, 0, layerWidth, layerHeight)
-        layerCtx.restore()
-
-        // Apply mask using template alpha channel with proper compositing
-        // First, draw the template to use as a mask
-        layerCtx.save()
-        layerCtx.globalCompositeOperation = 'destination-in'
-        layerCtx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-        layerCtx.restore()
-
-        // Composite masked layer onto main canvas
         ctx.save()
-        ctx.globalCompositeOperation = 'source-over'
-        ctx.drawImage(layerCanvas, 0, 0)
+        ctx.globalAlpha = layer.opacity
+
+        // Translate to center, apply rotation, then draw image centered
+        ctx.translate(centerX, centerY)
+        if (layer.rotation !== 0) {
+          ctx.rotate((layer.rotation * Math.PI) / 180)
+        }
+        ctx.drawImage(layerImg, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
         ctx.restore()
       }
 
-      // Convert to blob and download
-      canvas.toBlob((blob) => {
-        if (!blob) return
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `${carModel.name}_wrap.png`
-        a.click()
-        URL.revokeObjectURL(url)
-      }, 'image/png')
+      // Final crop to template alpha to match original UV mask
+      ctx.save()
+      ctx.globalCompositeOperation = 'destination-in'
+      ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
+      ctx.restore()
+
+      const dataUrl = canvas.toDataURL('image/png')
+      const a = document.createElement('a')
+      a.href = dataUrl
+      a.download = `${carModel.name}_wrap.png`
+      a.click()
     } catch (error) {
       console.error('Failed to download:', error)
     }
@@ -212,7 +148,6 @@ export default function DesignPage() {
     if (!carModel || layers.length === 0) return
 
     try {
-      // Generate texture the same way as download
       const templateImg = new Image()
       templateImg.crossOrigin = 'anonymous'
       templateImg.src = carModel.uvTextureUrl
@@ -222,8 +157,8 @@ export default function DesignPage() {
         templateImg.onerror = reject
       })
 
-      const templateWidth = templateImg.width
-      const templateHeight = templateImg.height
+      const templateWidth = templateImg.width || 1024
+      const templateHeight = templateImg.height || 1024
 
       const canvas = document.createElement('canvas')
       canvas.width = templateWidth
@@ -231,70 +166,30 @@ export default function DesignPage() {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
 
-      // Draw base color first if provided (replace non-transparent template pixels)
+      ctx.imageSmoothingEnabled = true
+      if ('imageSmoothingQuality' in ctx) {
+        // @ts-ignore
+        ctx.imageSmoothingQuality = 'high'
+      }
+
       if (baseColor) {
-        // Create a temporary canvas to process template with base color
-        const baseCanvas = document.createElement('canvas')
-        baseCanvas.width = templateWidth
-        baseCanvas.height = templateHeight
-        const baseCtx = baseCanvas.getContext('2d')
-        if (baseCtx) {
-          // Enable smoothing for smooth edges
-          baseCtx.imageSmoothingEnabled = true
-          if ('imageSmoothingQuality' in baseCtx) {
-            (baseCtx as any).imageSmoothingQuality = 'high'
-          }
-          
-          // Draw template
-          baseCtx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-          
-          // Get image data and replace non-transparent pixels with base color
-          const imageData = baseCtx.getImageData(0, 0, templateWidth, templateHeight)
-          const data = imageData.data
-          
-          // Convert hex color to RGB
-          let hex = baseColor.replace('#', '')
-          if (hex.length === 3) {
-            hex = hex.split('').map(char => char + char).join('')
-          }
-          const r = parseInt(hex.substring(0, 2), 16)
-          const g = parseInt(hex.substring(2, 4), 16)
-          const b = parseInt(hex.substring(4, 6), 16)
-          
-          // Use threshold to make base color pixels hard (no semi-transparency)
-          const TH = 250 // tune: 240-254, higher = stricter (removes more edge pixels)
-          
-          for (let i = 0; i < data.length; i += 4) {
-            const a = data[i + 3]
-            if (a >= TH) {
-              // Replace fully opaque pixels with base color (hard edges, no semi-transparency)
-              data[i] = r
-              data[i + 1] = g
-              data[i + 2] = b
-              data[i + 3] = 255
-            } else {
-              // Make semi-transparent edge pixels fully transparent
-              data[i + 3] = 0
-            }
-          }
-          
-          baseCtx.putImageData(imageData, 0, 0)
-          
-          // Draw processed base color onto main canvas
-          ctx.drawImage(baseCanvas, 0, 0, templateWidth, templateHeight)
-        }
+        ctx.save()
+        ctx.fillStyle = baseColor
+        ctx.fillRect(0, 0, templateWidth, templateHeight)
+        ctx.globalCompositeOperation = 'destination-in'
+        ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
+        ctx.restore()
       } else {
-        // Draw template as background if no base color
         ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
       }
 
-      const canvasWidth = 960
-      const canvasHeight = 640
-      const canvasScale = Math.min(canvasWidth / templateWidth, canvasHeight / templateHeight)
-      const templateDisplayWidth = templateWidth * canvasScale
-      const templateDisplayHeight = templateHeight * canvasScale
-      const templateOffsetX = (canvasWidth - templateDisplayWidth) / 2
-      const templateOffsetY = (canvasHeight - templateDisplayHeight) / 2
+      const editorWidth = 960
+      const editorHeight = 640
+      const scale = Math.min(editorWidth / templateWidth, editorHeight / templateHeight)
+      const displayWidth = templateWidth * scale
+      const displayHeight = templateHeight * scale
+      const offsetX = (editorWidth - displayWidth) / 2
+      const offsetY = (editorHeight - displayHeight) / 2
 
       for (const layer of layers) {
         const layerImg = new Image()
@@ -306,42 +201,28 @@ export default function DesignPage() {
           layerImg.onerror = reject
         })
 
-        const layerX = (layer.x - templateOffsetX) / canvasScale
-        const layerY = (layer.y - templateOffsetY) / canvasScale
-        const layerWidth = (layerImg.width * layer.scaleX) / canvasScale
-        const layerHeight = (layerImg.height * layer.scaleY) / canvasScale
-
-        const layerCanvas = document.createElement('canvas')
-        layerCanvas.width = templateWidth
-        layerCanvas.height = templateHeight
-        const layerCtx = layerCanvas.getContext('2d', { willReadFrequently: true })
-        if (!layerCtx) continue
-
-        layerCtx.save()
-        layerCtx.globalAlpha = layer.opacity
-        
-        if (layer.rotation !== 0) {
-          layerCtx.translate(layerX + layerWidth / 2, layerY + layerHeight / 2)
-          layerCtx.rotate((layer.rotation * Math.PI) / 180)
-          layerCtx.translate(-layerWidth / 2, -layerHeight / 2)
-        } else {
-          layerCtx.translate(layerX, layerY)
-        }
-
-        layerCtx.drawImage(layerImg, 0, 0, layerWidth, layerHeight)
-        layerCtx.restore()
-
-        // Apply mask using template alpha channel with proper compositing
-        layerCtx.save()
-        layerCtx.globalCompositeOperation = 'destination-in'
-        layerCtx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-        layerCtx.restore()
+        const centerX = (layer.x - offsetX) / scale
+        const centerY = (layer.y - offsetY) / scale
+        const drawWidth = (layerImg.width * layer.scaleX) / scale
+        const drawHeight = (layerImg.height * layer.scaleY) / scale
 
         ctx.save()
-        ctx.globalCompositeOperation = 'source-over'
-        ctx.drawImage(layerCanvas, 0, 0)
+        ctx.globalAlpha = layer.opacity
+
+        ctx.translate(centerX, centerY)
+        if (layer.rotation !== 0) {
+          ctx.rotate((layer.rotation * Math.PI) / 180)
+        }
+        ctx.drawImage(layerImg, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
         ctx.restore()
       }
+
+      ctx.save()
+      ctx.globalCompositeOperation = 'destination-in'
+      ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
+      ctx.restore()
+
+      const dataUrl = canvas.toDataURL('image/png')
 
       const formData = new FormData()
       formData.append('title', title)
@@ -351,9 +232,10 @@ export default function DesignPage() {
       
       // Convert canvas to blob
       const textureBlob = await new Promise<Blob>((resolve) => {
-        canvas.toBlob((blob) => {
-          resolve(blob || new Blob())
-        }, 'image/png')
+        fetch(dataUrl)
+          .then((res) => res.blob())
+          .then((blob) => resolve(blob))
+          .catch(() => resolve(new Blob()))
       })
       formData.append('texture', textureBlob, 'texture.png')
 
@@ -364,6 +246,9 @@ export default function DesignPage() {
 
       if (response.ok) {
         const wrap = await response.json()
+        if (typeof window !== 'undefined') {
+          window.alert('Wrap published! Redirecting to your wrap.')
+        }
         router.push(`/wrap/${wrap.id}`)
       }
     } catch (error) {
@@ -477,4 +362,3 @@ export default function DesignPage() {
     </div>
   )
 }
-

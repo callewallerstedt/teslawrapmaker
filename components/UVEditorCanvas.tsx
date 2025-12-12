@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { fabric } from 'fabric'
 import { Layer } from '@/lib/types'
 
@@ -14,7 +14,11 @@ interface UVEditorCanvasProps {
   maskEnabled: boolean
 }
 
-export default function UVEditorCanvas({
+export interface UVEditorCanvasHandle {
+  exportImage: () => string | null
+}
+
+function UVEditorCanvasInner({
   baseTextureUrl,
   layers,
   onLayerUpdate,
@@ -22,7 +26,7 @@ export default function UVEditorCanvas({
   onLayerDelete,
   baseColor,
   maskEnabled,
-}: UVEditorCanvasProps) {
+}: UVEditorCanvasProps, ref: React.Ref<UVEditorCanvasHandle>) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const fabricCanvasRef = useRef<fabric.Canvas | null>(null)
@@ -31,6 +35,24 @@ export default function UVEditorCanvas({
   const baseColorObjectRef = useRef<fabric.Image | null>(null) // Base color image (processed template)
   const [isDragging, setIsDragging] = useState(false)
   const centerGuideLineRef = useRef<fabric.Line | null>(null) // Center guide line
+
+  useImperativeHandle(ref, () => ({
+    exportImage: () => {
+      const canvas = fabricCanvasRef.current
+      if (!canvas) return null
+
+      const width = canvas.getWidth()
+      const height = canvas.getHeight()
+      const maxSide = Math.max(width, height) || 1
+      const targetMax = 1024
+      const multiplier = targetMax / maxSide
+
+      return canvas.toDataURL({
+        format: 'png',
+        multiplier,
+      } as any)
+    },
+  }))
 
   useEffect(() => {
     if (!canvasRef.current) return
@@ -499,6 +521,8 @@ export default function UVEditorCanvas({
           scaleY: layer.scaleY,
           angle: layer.rotation,
           opacity: layer.opacity,
+          originX: 'center',
+          originY: 'center',
           dirty: true,
           objectCaching: false,
         })
@@ -515,10 +539,19 @@ export default function UVEditorCanvas({
           scaleY: layer.scaleY,
           angle: layer.rotation,
           opacity: layer.opacity,
+          originX: 'center',
+          originY: 'center',
           dirty: true,
           objectCaching: false,
         })
         ;(img as any).layerId = layer.id
+
+        img.on('rotating', () => {
+          // Snap rotation to nearest 10 degrees during rotation for real-time feedback
+          const currentAngle = img.angle || 0
+          const snappedAngle = Math.round(currentAngle / 10) * 10
+          img.set('angle', snappedAngle)
+        })
 
         img.on('modified', () => {
           // Hide guide line when done moving
@@ -528,13 +561,18 @@ export default function UVEditorCanvas({
             centerGuideLineRef.current = null
             canvas.requestRenderAll()
           }
-          
+
+          // Ensure final rotation is snapped to nearest 10 degrees
+          const currentAngle = img.angle || 0
+          const snappedAngle = Math.round(currentAngle / 10) * 10
+          img.set('angle', snappedAngle)
+
           onLayerUpdate(layer.id, {
-            x: img.left || 0,
-            y: img.top || 0,
+            x: img.left || 0, // With originX: 'center', this is the center X
+            y: img.top || 0,  // With originY: 'center', this is the center Y
             scaleX: img.scaleX || 1,
             scaleY: img.scaleY || 1,
-            rotation: img.angle || 0,
+            rotation: snappedAngle,
           })
           if (maskEnabled) applyTemplateClip(img)
         })
@@ -543,21 +581,21 @@ export default function UVEditorCanvas({
           // Snap to center X if close enough
           const canvas = fabricCanvasRef.current
           if (!canvas) return
-          
+
           const canvasWidth = canvas.getWidth()
           const centerX = canvasWidth / 2
           const snapThreshold = 15 // pixels - not too aggressive
           const currentX = img.left || 0
-          const imgWidth = (img.width || 0) * (img.scaleX || 1)
-          const imgCenterX = currentX + imgWidth / 2
-          
+
+          // Since we use originX: 'center', currentX is already the center of the object
+          const imgCenterX = currentX
+
           // Check if image center is close to canvas center
           const distanceFromCenter = Math.abs(imgCenterX - centerX)
-          
+
           if (distanceFromCenter < snapThreshold) {
-            // Snap to center
-            const snappedX = centerX - imgWidth / 2
-            img.set({ left: snappedX })
+            // Snap to center - since originX is 'center', we set left directly to centerX
+            img.set({ left: centerX })
             
             // Show guide line
             if (!centerGuideLineRef.current) {
@@ -808,3 +846,6 @@ export default function UVEditorCanvas({
   )
 }
 
+const UVEditorCanvas = forwardRef<UVEditorCanvasHandle, UVEditorCanvasProps>(UVEditorCanvasInner)
+
+export default UVEditorCanvas

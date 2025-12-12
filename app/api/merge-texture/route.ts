@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
       // If it's a local path, create a placeholder
       const placeholderBuffer = Buffer.alloc(1024 * 1024, 0) // 1MB placeholder
       const merged = await mergeTexture(placeholderBuffer, layers)
-      return new NextResponse(merged, {
+      return new NextResponse(new Uint8Array(merged), {
         headers: {
           'Content-Type': 'image/png',
         },
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     // Merge textures
     const merged = await mergeTexture(baseBuffer, layers)
 
-    return new NextResponse(merged, {
+    return new NextResponse(new Uint8Array(merged), {
       headers: {
         'Content-Type': 'image/png',
       },
@@ -41,5 +41,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Merge failed' }, { status: 500 })
   }
 }
+
+
+
+
 
 

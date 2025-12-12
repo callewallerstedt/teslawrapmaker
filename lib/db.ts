@@ -4,7 +4,7 @@
 import { readdir } from 'fs/promises'
 import { join } from 'path'
 import { CarModel, Wrap } from './types'
-import { supabase } from './supabase'
+import { supabase, supabaseAdmin } from './supabase'
 
 let carModelsCache: CarModel[] | null = null
 
@@ -123,9 +123,12 @@ export async function getCarModel(id: string): Promise<CarModel | null> {
 export async function getWraps(): Promise<Wrap[]> {
   // Supabase implementation
   try {
-    const { data, error } = await supabase
+    // Use admin client if available for consistent reads with likes updates
+    const client = supabaseAdmin || supabase
+
+    const { data, error } = await client
       .from('wraps')
-      .select('*')
+      .select('id, author_id, car_model_id, texture_url, preview_render_url, title, description, username, likes, created_at')
       .order('likes', { ascending: false })
       .order('created_at', { ascending: false })
 
@@ -141,8 +144,8 @@ export async function getWraps(): Promise<Wrap[]> {
       textureUrl: row.texture_url,
       previewRenderUrl: row.preview_render_url,
       title: row.title,
-      description: row.description,
-      username: row.username,
+      description: row.description || undefined,
+      username: row.username || undefined,
       likes: row.likes || 0,
       createdAt: row.created_at,
     }))
@@ -158,9 +161,12 @@ export async function getWraps(): Promise<Wrap[]> {
 export async function getWrap(id: string): Promise<Wrap | null> {
   // Supabase implementation
   try {
-    const { data, error } = await supabase
+    // Use admin client if available for consistent reads with likes updates
+    const client = supabaseAdmin || supabase
+
+    const { data, error } = await client
       .from('wraps')
-      .select('*')
+      .select('id, author_id, car_model_id, texture_url, preview_render_url, title, description, username, likes, created_at')
       .eq('id', id)
       .single()
 
@@ -175,8 +181,8 @@ export async function getWrap(id: string): Promise<Wrap | null> {
     textureUrl: data.texture_url,
     previewRenderUrl: data.preview_render_url,
     title: data.title,
-    description: data.description,
-    username: data.username,
+    description: data.description || undefined,
+    username: data.username || undefined,
     likes: data.likes || 0,
     createdAt: data.created_at,
   }
@@ -192,7 +198,9 @@ export async function getWrap(id: string): Promise<Wrap | null> {
 export async function createWrap(wrap: Omit<Wrap, 'id' | 'createdAt' | 'likes'>): Promise<Wrap> {
   // Supabase implementation
   try {
-    const { data, error } = await supabase
+    const client = supabase // Use consistent client
+
+    const { data, error } = await client
       .from('wraps')
       .insert({
         car_model_id: wrap.carModelId,
@@ -200,7 +208,7 @@ export async function createWrap(wrap: Omit<Wrap, 'id' | 'createdAt' | 'likes'>)
         preview_render_url: wrap.previewRenderUrl,
         title: wrap.title,
         description: wrap.description || null,
-        username: wrap.username || null,
+        username: wrap.username || 'user',
         author_id: wrap.authorId || null,
       })
       .select()
@@ -217,8 +225,8 @@ export async function createWrap(wrap: Omit<Wrap, 'id' | 'createdAt' | 'likes'>)
     textureUrl: data.texture_url,
     previewRenderUrl: data.preview_render_url,
     title: data.title,
-    description: data.description,
-    username: data.username,
+    description: data.description || undefined,
+    username: data.username || undefined,
     likes: data.likes || 0,
     createdAt: data.created_at,
   }
@@ -241,67 +249,153 @@ export async function createWrap(wrap: Omit<Wrap, 'id' | 'createdAt' | 'likes'>)
 // Check if user has already liked a wrap
 export async function hasUserLikedWrap(wrapId: string, ipAddress: string): Promise<boolean> {
   try {
-    const { data, error } = await supabase
+    const client = supabase // Use consistent client
+
+    console.log('Checking if user liked wrap:', wrapId, 'IP:', ipAddress)
+
+    const { data, error } = await client
       .from('wrap_likes')
       .select('id')
-      .eq('wrap_id', wrapId)
+      .eq('wrap_id', wrapId) // Supabase will handle UUID conversion
       .eq('ip_address', ipAddress)
-      .single()
+      .maybeSingle()
 
-    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+    console.log('Like check result - data:', data, 'error:', error)
+
+    if (error) {
       console.error('Error checking like:', error)
       return false
     }
 
-    return !!data
+    const hasLiked = !!data
+    console.log('User has liked wrap:', hasLiked)
+    return hasLiked
   } catch (error) {
     console.error('Supabase not configured for like check')
     return false
   }
 }
 
-export async function likeWrap(id: string, ipAddress: string): Promise<Wrap | null> {
-  // Supabase implementation
+export async function likeWrap(id: string, ipAddress: string): Promise<
+  | { status: 'liked'; wrap: Wrap }
+  | { status: 'already_liked'; wrap: Wrap }
+  | { status: 'not_found' }
+> {
   try {
+    const client = supabase // Use consistent client
+
+    console.log('Liking wrap:', id, 'for IP:', ipAddress)
+
     // First, record the like in wrap_likes table
-    const { error: likeError } = await supabase
+    const { error: likeError } = await client
       .from('wrap_likes')
       .insert({
-        wrap_id: id,
+        wrap_id: id, // Supabase will handle UUID conversion
         ip_address: ipAddress,
       })
 
+    if (likeError?.code === '23505') {
+      console.log('User already liked this wrap')
+      const wrap = await getWrap(id)
+      if (!wrap) return { status: 'not_found' }
+      return { status: 'already_liked', wrap }
+    }
+
     if (likeError) {
-      // If it's a unique constraint violation, user already liked
-      if (likeError.code === '23505') {
-        console.log('User already liked this wrap')
-        return null
-      }
       console.error('Error recording like:', likeError)
+      return { status: 'not_found' }
+    }
+
+    console.log('Successfully inserted like record')
+
+    const wrap = await getWrap(id)
+    if (!wrap) return { status: 'not_found' }
+
+    console.log('Successfully liked wrap, new likes count:', wrap.likes)
+    return { status: 'liked', wrap }
+  } catch (error) {
+    console.error('Supabase not configured')
+    return { status: 'not_found' }
+  }
+}
+
+export async function unlikeWrap(id: string, ipAddress: string): Promise<Wrap | null> {
+  // Supabase implementation
+  try {
+    const client = supabase // Use consistent client
+
+    console.log('🔄 Unliking wrap:', id, 'for IP:', ipAddress)
+
+    // First, check if the like exists
+    const { data: existingLike, error: checkError } = await client
+      .from('wrap_likes')
+      .select('id')
+      .eq('wrap_id', id)
+      .eq('ip_address', ipAddress)
+      .maybeSingle()
+
+    console.log('Existing like check result:', { data: existingLike, error: checkError })
+
+    if (checkError) {
+      console.error('❌ Error checking existing like:', checkError)
       return null
     }
 
+    if (!existingLike) {
+      console.log('ℹ️ No like record found to delete for wrap:', id, 'IP:', ipAddress)
+      // No record to delete, return current wrap without decrementing
+      const wrap = await getWrap(id)
+      return wrap // do not decrement
+    }
+
+    // Record exists, proceed with deletion and decrement
+    console.log('✅ Found existing like record, deleting...')
+
+    // Remove the like from wrap_likes table
+    const { error: unlikeError } = await client
+      .from('wrap_likes')
+      .delete()
+      .eq('wrap_id', id)
+      .eq('ip_address', ipAddress)
+
+    if (unlikeError) {
+      console.error('❌ Error removing like:', unlikeError)
+      return null
+    }
+
+    console.log('✅ Successfully deleted like record')
+
     // Get current likes
-    const { data: currentWrap } = await supabase
+    const { data: currentWrap, error: wrapError } = await client
       .from('wraps')
       .select('likes')
       .eq('id', id)
       .single()
 
-    if (!currentWrap) return null
+    if (wrapError || !currentWrap) {
+      console.error('❌ Wrap not found after unlike:', wrapError)
+      return null
+    }
 
-    // Increment likes
-    const { data, error } = await supabase
+    console.log('📊 Current likes before decrement:', currentWrap.likes)
+
+    // Decrement likes (prevent negative)
+    const newLikes = Math.max(0, (currentWrap.likes || 0) - 1)
+    console.log('📊 New likes count:', newLikes)
+
+    const { data, error } = await client
       .from('wraps')
-      .update({ likes: (currentWrap.likes || 0) + 1 })
+      .update({ likes: newLikes })
       .eq('id', id)
       .select()
       .single()
 
     if (error) {
-      console.error('Error liking wrap:', error)
+      console.error('❌ Error updating likes count:', error)
       return null
     }
+
+    console.log('✅ Successfully updated likes count to:', data.likes)
 
   return {
     id: data.id,
@@ -310,22 +404,13 @@ export async function likeWrap(id: string, ipAddress: string): Promise<Wrap | nu
     textureUrl: data.texture_url,
     previewRenderUrl: data.preview_render_url,
     title: data.title,
-    description: data.description,
-    username: data.username,
+    description: data.description || undefined,
+    username: data.username || undefined,
     likes: data.likes || 0,
     createdAt: data.created_at,
   }
   } catch (error) {
-    console.error('Supabase not configured')
+    console.error('❌ Supabase error in unlikeWrap:', error)
     return null
   }
-
-  // In-memory fallback
-  // const wrap = wraps.find((w) => w.id === id)
-  // if (wrap) {
-  //   wrap.likes++
-  //   return wrap
-  // }
-  // return null
 }
-
