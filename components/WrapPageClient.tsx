@@ -22,11 +22,11 @@ export default function WrapPageClient({ wrap, carModelName }: WrapPageClientPro
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <div className="bg-transparent rounded border border-[#2a2a2a] p-4">
-            <div className="bg-[#1a1a1a] rounded overflow-hidden border border-[#2a2a2a]">
+            <div className="bg-[#1a1a1a] rounded overflow-hidden border border-[#2a2a2a] flex items-center justify-center p-4">
               <img
                 src={wrap.textureUrl}
                 alt={wrap.title}
-                className="w-full h-auto"
+                className="max-w-full max-h-96 object-contain rounded"
                 style={{ imageRendering: 'auto' }}
               />
             </div>

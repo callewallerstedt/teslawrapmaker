@@ -17,7 +17,7 @@ export default function Navigation({ currentPath = '/' }: NavigationProps) {
         <div className="flex items-center h-12">
           <div className="flex items-center gap-6">
             <Link href="/" className="text-2xl font-semibold text-[#ededed] tracking-tight" style={{ fontFamily: 'Anton, sans-serif', letterSpacing: '0.05em' }}>
-              TeslaWrapMaker
+              EvWrapStudio
             </Link>
 
             {/* Navigation Tabs */}

@@ -97,6 +97,22 @@ function UVEditorCanvasInner({
         try {
           canvas.setBackgroundImage(img, () => {
             if (canvas && canvas.getContext()) {
+              // Auto-fit the view to show the entire template
+              const canvasWidth = canvas.getWidth()
+              const canvasHeight = canvas.getHeight()
+              const imgWidth = img.width || 1
+              const imgHeight = img.height || 1
+
+              // Calculate zoom to fit the template with some padding
+              const scaleX = canvasWidth / imgWidth
+              const scaleY = canvasHeight / imgHeight
+              const zoom = Math.min(scaleX, scaleY) * 0.8 // 80% to add some padding
+
+              // Center the view on the template
+              const centerX = canvasWidth / 2
+              const centerY = canvasHeight / 2
+
+              canvas.zoomToPoint({ x: centerX, y: centerY }, Math.max(0.1, Math.min(1, zoom)))
               canvas.renderAll()
             }
           })

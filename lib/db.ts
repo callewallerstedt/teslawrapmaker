@@ -38,7 +38,7 @@ function formatModelName(folderName: string): string {
       return 'Tesla Model Y'
     } else if (parts.length === 2) {
       if (parts[1] === 'l') {
-        return 'Tesla Model Y Long Range'
+        return 'Tesla Model Y L'
       }
     } else if (parts.length === 3) {
       const year = parts[1]

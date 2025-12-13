@@ -188,7 +188,7 @@ export default function WrapActions({
               </div>
               <h3 className="text-lg font-semibold text-[#ededed] mb-3">Your download has started!</h3>
               <p className="text-sm text-[#a0a0a0] mb-4 leading-relaxed">
-                TeslaWrapMaker is completely free and will always remain free. However, maintaining and improving the platform takes time and resources. If you'd like to support the project, every contribution no matter how small is appreciated!
+                EvWrapStudio is completely free and will always remain free. However, maintaining and improving the platform takes time and resources. If you'd like to support the project, every contribution no matter how small is appreciated!
               </p>
             </div>
 

@@ -2,8 +2,11 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'TeslaWrapMaker - Custom Car Wrap Designer',
-  description: 'Design and preview custom car wraps in real-time',
+  title: 'EvWrapStudio - Custom EV Wrap Designer',
+  description: 'Design and explore custom electric vehicle wraps. Upload your designs, position them perfectly, and create stunning EV transformations.',
+  icons: {
+    icon: '/icon.png',
+  },
 }
 
 export default function RootLayout({

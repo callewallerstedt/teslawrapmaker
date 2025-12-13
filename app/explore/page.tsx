@@ -81,7 +81,7 @@ export default function ExplorePage() {
       <main className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-6 py-8">
         <div className="mb-8">
           <h1 className="text-4xl font-semibold text-[#ededed] mb-2 tracking-tight">Explore</h1>
-          <p className="text-[#a0a0a0] font-light">Browse wraps created by the community</p>
+          <p className="text-[#a0a0a0] font-light">Browse EV wraps created by the community</p>
         </div>
 
         {/* Search + Filters */}
