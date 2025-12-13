@@ -57,89 +57,10 @@ export default function DesignPage() {
     if (!carModel) return
 
     try {
-      const templateImg = new Image()
-      templateImg.crossOrigin = 'anonymous'
-      templateImg.src = carModel.uvTextureUrl
-      
-      await new Promise((resolve, reject) => {
-        templateImg.onload = resolve
-        templateImg.onerror = reject
-      })
-
-      const templateWidth = templateImg.width || 1024
-      const templateHeight = templateImg.height || 1024
-
-      // Render at original template resolution (e.g. 1024x1024)
-      const canvas = document.createElement('canvas')
-      canvas.width = templateWidth
-      canvas.height = templateHeight
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-
-      ctx.imageSmoothingEnabled = true
-      if ('imageSmoothingQuality' in ctx) {
-        // @ts-ignore
-        ctx.imageSmoothingQuality = 'high'
+      const dataUrl = editorRef.current?.exportImage()
+      if (!dataUrl) {
+        throw new Error('Editor is not ready to export yet.')
       }
-
-      // Draw base: either template tinted with base color, or raw template
-      if (baseColor) {
-        ctx.save()
-        ctx.fillStyle = baseColor
-        ctx.fillRect(0, 0, templateWidth, templateHeight)
-        ctx.globalCompositeOperation = 'destination-in'
-        ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-        ctx.restore()
-      } else {
-        ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-      }
-
-      // Map from editor canvas (960x640) coordinates to template coordinates
-      const editorWidth = 960
-      const editorHeight = 640
-      const scale = Math.min(editorWidth / templateWidth, editorHeight / templateHeight)
-      const displayWidth = templateWidth * scale
-      const displayHeight = templateHeight * scale
-      const offsetX = (editorWidth - displayWidth) / 2
-      const offsetY = (editorHeight - displayHeight) / 2
-
-      for (const layer of layers) {
-        const layerImg = new Image()
-        layerImg.crossOrigin = 'anonymous'
-        layerImg.src = layer.imageUrl
-
-        await new Promise((resolve, reject) => {
-          layerImg.onload = resolve
-          layerImg.onerror = reject
-        })
-
-        const layerX = (layer.x - offsetX) / scale
-        const layerY = (layer.y - offsetY) / scale
-        const layerWidth = (layerImg.width * layer.scaleX) / scale
-        const layerHeight = (layerImg.height * layer.scaleY) / scale
-
-        ctx.save()
-        ctx.globalAlpha = layer.opacity
-
-        if (layer.rotation !== 0) {
-          ctx.translate(layerX + layerWidth / 2, layerY + layerHeight / 2)
-          ctx.rotate((layer.rotation * Math.PI) / 180)
-          ctx.translate(-layerWidth / 2, -layerHeight / 2)
-        } else {
-          ctx.translate(layerX, layerY)
-        }
-
-        ctx.drawImage(layerImg, 0, 0, layerWidth, layerHeight)
-        ctx.restore()
-      }
-
-      // Final crop to template alpha to match original UV mask
-      ctx.save()
-      ctx.globalCompositeOperation = 'destination-in'
-      ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-      ctx.restore()
-
-      const dataUrl = canvas.toDataURL('image/png')
       const a = document.createElement('a')
       a.href = dataUrl
       a.download = `${carModel.name}_wrap.png`
@@ -156,85 +77,10 @@ export default function DesignPage() {
     if (!carModel || layers.length === 0) return
 
     try {
-      const templateImg = new Image()
-      templateImg.crossOrigin = 'anonymous'
-      templateImg.src = carModel.uvTextureUrl
-      
-      await new Promise((resolve, reject) => {
-        templateImg.onload = resolve
-        templateImg.onerror = reject
-      })
-
-      const templateWidth = templateImg.width || 1024
-      const templateHeight = templateImg.height || 1024
-
-      const canvas = document.createElement('canvas')
-      canvas.width = templateWidth
-      canvas.height = templateHeight
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-
-      ctx.imageSmoothingEnabled = true
-      if ('imageSmoothingQuality' in ctx) {
-        // @ts-ignore
-        ctx.imageSmoothingQuality = 'high'
+      const dataUrl = editorRef.current?.exportImage()
+      if (!dataUrl) {
+        throw new Error('Editor is not ready to export yet.')
       }
-
-      if (baseColor) {
-        ctx.save()
-        ctx.fillStyle = baseColor
-        ctx.fillRect(0, 0, templateWidth, templateHeight)
-        ctx.globalCompositeOperation = 'destination-in'
-        ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-        ctx.restore()
-      } else {
-        ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-      }
-
-      const editorWidth = 960
-      const editorHeight = 640
-      const scale = Math.min(editorWidth / templateWidth, editorHeight / templateHeight)
-      const displayWidth = templateWidth * scale
-      const displayHeight = templateHeight * scale
-      const offsetX = (editorWidth - displayWidth) / 2
-      const offsetY = (editorHeight - displayHeight) / 2
-
-      for (const layer of layers) {
-        const layerImg = new Image()
-        layerImg.crossOrigin = 'anonymous'
-        layerImg.src = layer.imageUrl
-
-        await new Promise((resolve, reject) => {
-          layerImg.onload = resolve
-          layerImg.onerror = reject
-        })
-
-        const layerX = (layer.x - offsetX) / scale
-        const layerY = (layer.y - offsetY) / scale
-        const layerWidth = (layerImg.width * layer.scaleX) / scale
-        const layerHeight = (layerImg.height * layer.scaleY) / scale
-
-        ctx.save()
-        ctx.globalAlpha = layer.opacity
-
-        if (layer.rotation !== 0) {
-          ctx.translate(layerX + layerWidth / 2, layerY + layerHeight / 2)
-          ctx.rotate((layer.rotation * Math.PI) / 180)
-          ctx.translate(-layerWidth / 2, -layerHeight / 2)
-        } else {
-          ctx.translate(layerX, layerY)
-        }
-
-        ctx.drawImage(layerImg, 0, 0, layerWidth, layerHeight)
-        ctx.restore()
-      }
-
-      ctx.save()
-      ctx.globalCompositeOperation = 'destination-in'
-      ctx.drawImage(templateImg, 0, 0, templateWidth, templateHeight)
-      ctx.restore()
-
-      const dataUrl = canvas.toDataURL('image/png')
 
       const formData = new FormData()
       formData.append('title', title)

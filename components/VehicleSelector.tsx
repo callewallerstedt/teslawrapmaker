@@ -78,22 +78,22 @@ export default function VehicleSelector() {
         </div>
       ) : (
         // Step 2: Select Trim Level
-        <div>
-          <div className="flex items-center gap-4 mb-8">
+        <div className="relative">
+          <div className="flex items-center justify-center mb-2">
             <button
               onClick={handleBack}
-              className="text-[#a0a0a0] hover:text-[#ededed] transition-colors flex items-center gap-2"
+              className="absolute left-0 text-[#a0a0a0] hover:text-[#ededed] transition-colors flex items-center gap-2"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
               Back
             </button>
-          </div>
 
-          <h2 className="text-2xl font-semibold text-[#ededed] mb-2 text-center">
-            Select {selectedVehicleData?.name} Trim
-          </h2>
+            <h2 className="text-2xl font-semibold text-[#ededed]">
+              Select {selectedVehicleData?.name} Trim
+            </h2>
+          </div>
           <p className="text-[#a0a0a0] text-center mb-8">
             Choose the specific model variant
           </p>

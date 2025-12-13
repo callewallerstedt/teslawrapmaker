@@ -42,16 +42,73 @@ function UVEditorCanvasInner({
       const canvas = fabricCanvasRef.current
       if (!canvas) return null
 
-      const width = canvas.getWidth()
-      const height = canvas.getHeight()
-      const maxSide = Math.max(width, height) || 1
-      const targetMax = 1024
-      const multiplier = targetMax / maxSide
+      // Use the displayed template that the user is aligning against
+      const bg = canvas.backgroundImage as fabric.Image | undefined
+      if (!bg) return null
 
-      return canvas.toDataURL({
-        format: 'png',
-        multiplier,
-      } as any)
+      canvas.discardActiveObject()
+      canvas.getObjects().forEach((o) => o.setCoords())
+
+      // Fabric 5 export uses `viewportTransform` (pan/zoom) by default.
+      // For texture export we must ignore the viewport so output always matches the template coordinates.
+      const prevVpt = (canvas.viewportTransform || [1, 0, 0, 1, 0, 0]).slice()
+      const prevBgColor = canvas.backgroundColor
+      const prevBgVpt = (canvas as any).backgroundVpt
+
+      // Template rect in canvas coordinates (world coords)
+      const iw = bg.width || 1
+      const ih = bg.height || 1
+      const sx = bg.scaleX || 1
+      const sy = bg.scaleY || 1
+      const cx = bg.left || 0
+      const cy = bg.top || 0
+
+      const cropW = iw * sx
+      const cropH = ih * sy
+      const cropL = cx - cropW / 2
+      const cropT = cy - cropH / 2
+
+      // Multiplier that makes the cropped output exactly iw x ih pixels.
+      // Background is uniformly scaled (scaleX === scaleY), so a single multiplier is correct.
+      const multiplier = 1 / sx
+
+      // Temporarily hide helper objects (e.g. snap guide line) during export
+      const hidden: { obj: fabric.Object; visible: boolean | undefined }[] = []
+      canvas.getObjects().forEach((obj) => {
+        if ((obj as any).excludeFromExport) {
+          hidden.push({ obj, visible: obj.visible })
+          obj.visible = false
+        }
+      })
+
+      try {
+        // Ignore viewport pan/zoom so export is always in template space
+        canvas.setViewportTransform([1, 0, 0, 1, 0, 0])
+        ;(canvas as any).backgroundVpt = true
+
+        // Export with transparent background (no editor dark gray)
+        canvas.backgroundColor = 'transparent'
+        canvas.renderAll()
+
+        return canvas.toDataURL({
+          format: 'png',
+          left: cropL,
+          top: cropT,
+          width: cropW,
+          height: cropH,
+          multiplier,
+          enableRetinaScaling: false, // avoid devicePixelRatio scaling
+        } as any)
+      } finally {
+        // Restore visibility and canvas state
+        hidden.forEach(({ obj, visible }) => {
+          obj.visible = visible
+        })
+        canvas.backgroundColor = prevBgColor
+        ;(canvas as any).backgroundVpt = prevBgVpt
+        canvas.setViewportTransform(prevVpt as any)
+        canvas.renderAll()
+      }
     },
   }))
 
@@ -125,36 +182,24 @@ function UVEditorCanvasInner({
         const imgWidth = img.width || 1
         const imgHeight = img.height || 1
         const scale = Math.min(canvasWidth / imgWidth, canvasHeight / imgHeight)
-        
+
         img.set({
-          left: (canvasWidth - imgWidth * scale) / 2,
-          top: (canvasHeight - imgHeight * scale) / 2,
+          originX: 'center',
+          originY: 'center',
+          left: canvasWidth / 2,
+          top: canvasHeight / 2,
           scaleX: scale,
           scaleY: scale,
           selectable: false,
           evented: false,
         })
+        img.setCoords()
         try {
           canvas.setBackgroundImage(img, () => {
-            if (canvas && canvas.getContext()) {
-              // Auto-fit the view to show the entire template
-              const canvasWidth = canvas.getWidth()
-              const canvasHeight = canvas.getHeight()
-              const imgWidth = img.width || 1
-              const imgHeight = img.height || 1
-
-              // Calculate zoom to fit the template with some padding
-              const scaleX = canvasWidth / imgWidth
-              const scaleY = canvasHeight / imgHeight
-              const zoom = Math.min(scaleX, scaleY) * 0.8 // 80% to add some padding
-
-              // Center the view on the template
-              const centerX = canvasWidth / 2
-              const centerY = canvasHeight / 2
-
-              canvas.zoomToPoint({ x: centerX, y: centerY }, Math.max(0.1, Math.min(1, zoom)))
-              canvas.renderAll()
-            }
+            // Reset viewport to identity (no pan/zoom)
+            canvas.setViewportTransform([1, 0, 0, 1, 0, 0]) // no pan
+            canvas.setZoom(1) // no zoom
+            canvas.requestRenderAll()
           })
         } catch (error) {
           console.error('Error setting background image:', error)
@@ -167,28 +212,29 @@ function UVEditorCanvasInner({
     // Load base texture separately for overlay masking
     fabric.Image.fromURL(baseTextureUrl, (overlayImg) => {
       if (overlayImg) {
-        const canvasWidth = canvas.getWidth()
-        const canvasHeight = canvas.getHeight()
+        const cw = canvas.getWidth()
+        const ch = canvas.getHeight()
         const imgWidth = overlayImg.width || 1
         const imgHeight = overlayImg.height || 1
-        const scale = Math.min(canvasWidth / imgWidth, canvasHeight / imgHeight)
-        
+        const scale = Math.min(cw / imgWidth, ch / imgHeight)
+
         overlayImg.set({
-          left: (canvasWidth - imgWidth * scale) / 2,
-          top: (canvasHeight - imgHeight * scale) / 2,
+          originX: 'center',
+          originY: 'center',
+          left: cw / 2,
+          top: ch / 2,
           scaleX: scale,
           scaleY: scale,
           selectable: false,
           evented: false,
         })
+        overlayImg.setCoords()
         templateOverlayRef.current = overlayImg
       }
     }, {
       crossOrigin: 'anonymous'
     })
 
-    // Disable object caching globally to reduce pixelation on transforms
-    fabric.Object.prototype.objectCaching = false
 
     // Add pan functionality (space + drag or middle mouse)
     let isPanning = false
@@ -273,7 +319,10 @@ function UVEditorCanvasInner({
       let zoom = canvas.getZoom()
       zoom *= 0.999 ** delta
       zoom = Math.max(0.1, Math.min(5, zoom))
-      canvas.zoomToPoint({ x: opt.e.offsetX, y: opt.e.offsetY }, zoom)
+
+      const p = canvas.getPointer(opt.e) // correct coordinate space
+      canvas.zoomToPoint(new fabric.Point(p.x, p.y), zoom)
+
       opt.e.preventDefault()
       opt.e.stopPropagation()
     })
@@ -296,7 +345,58 @@ function UVEditorCanvasInner({
       width: canvasSize.width,
       height: canvasSize.height,
     })
-    canvas.renderAll()
+
+    // Reset viewport to identity after resize
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]) // no pan
+    canvas.setZoom(1) // no zoom
+
+    // Re-center and re-scale background if it exists
+    const bg = canvas.backgroundImage as any
+    if (bg) {
+      const cw = canvas.getWidth()
+      const ch = canvas.getHeight()
+      const bw = bg.width || 1
+      const bh = bg.height || 1
+      const s = Math.min(cw / bw, ch / bh)
+
+      bg.set({
+        originX: 'center',
+        originY: 'center',
+        left: cw / 2,
+        top: ch / 2,
+        scaleX: s,
+        scaleY: s,
+      })
+      bg.setCoords?.()
+    }
+
+    // Re-center and re-scale template overlay if it exists
+    const overlay = templateOverlayRef.current
+    if (overlay) {
+      const cw = canvas.getWidth()
+      const ch = canvas.getHeight()
+      const ow = overlay.width || 1
+      const oh = overlay.height || 1
+      const scale = Math.min(cw / ow, ch / oh)
+
+      overlay.set({
+        originX: 'center',
+        originY: 'center',
+        left: cw / 2,
+        top: ch / 2,
+        scaleX: scale,
+        scaleY: scale,
+      })
+      overlay.setCoords()
+    }
+
+    // Reapply masks after resize to match new overlay transform
+    if (maskEnabled) {
+      layerObjectsRef.current.forEach((img) => applyTemplateClip(img))
+      if (baseColorObjectRef.current) applyTemplateClip(baseColorObjectRef.current)
+    }
+
+    canvas.requestRenderAll()
   }, [canvasSize.width, canvasSize.height])
 
   // Apply template clip to image layers with strengthened edge opacity
@@ -312,10 +412,14 @@ function UVEditorCanvasInner({
 
     const canvasWidth = canvas.getWidth()
     const canvasHeight = canvas.getHeight()
-    maskCanvas.width = canvasWidth
-    maskCanvas.height = canvasHeight
 
-    // Draw template at its position
+    // Generate at higher resolution for smoother zoom
+    const dpr = window.devicePixelRatio || 1
+    maskCanvas.width = canvasWidth * dpr
+    maskCanvas.height = canvasHeight * dpr
+    maskCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+    // Draw template at its actual position on canvas
     const templateElement = template.getElement() as HTMLImageElement
     if (!templateElement) return
 
@@ -323,47 +427,54 @@ function UVEditorCanvasInner({
     const th = template.height || 1
     const sx = template.scaleX || 1
     const sy = template.scaleY || 1
-    const tx = template.left || 0
-    const ty = template.top || 0
+    const cx = template.left || 0  // center X
+    const cy = template.top || 0   // center Y
 
-    maskCtx.drawImage(templateElement, tx, ty, tw * sx, th * sy)
+    const drawW = tw * sx
+    const drawH = th * sy
+    const drawX = cx - drawW / 2  // top-left X
+    const drawY = cy - drawH / 2  // top-left Y
 
-    // Get image data and apply gamma curve to strengthen edge opacity
-    const imageData = maskCtx.getImageData(0, 0, canvasWidth, canvasHeight)
+    maskCtx.clearRect(0, 0, canvasWidth, canvasHeight)
+
+    // Enable smoothing for smooth mask edges
+    maskCtx.imageSmoothingEnabled = true
+    ;(maskCtx as any).imageSmoothingQuality = 'high'
+
+    maskCtx.drawImage(templateElement, drawX, drawY, drawW, drawH)
+
+    // Get image data and build smooth mask from alpha channel
+    const w = Math.round(canvasWidth * dpr)
+    const h = Math.round(canvasHeight * dpr)
+
+    const imageData = maskCtx.getImageData(0, 0, w, h)
     const data = imageData.data
 
-    // Strengthen edge opacity without expanding into fully transparent space
-    // gamma < 1 makes edge more opaque. Try 0.55 to 0.75.
-    const gamma = 0.6
-
+    // Keep original alpha for smooth edges (no hard thresholding)
     for (let i = 0; i < data.length; i += 4) {
-      const a = data[i + 3]
-
-      // Keep RGB white
-      data[i] = 255
-      data[i + 1] = 255
-      data[i + 2] = 255
-
-      if (a === 0) {
-        data[i + 3] = 0
-      } else {
-        const x = a / 255
-        const y = Math.pow(x, gamma)
-        data[i + 3] = Math.round(255 * y)
-      }
+      const a = data[i + 3] // template alpha
+      data[i] = 255         // R
+      data[i + 1] = 255     // G
+      data[i + 2] = 255     // B
+      data[i + 3] = a       // keep original alpha for smooth edges
     }
 
     maskCtx.putImageData(imageData, 0, 0)
 
-    // Create fabric image from processed mask
+    // Debug: check mask coverage
+    let nonZero = 0
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) nonZero++
+    console.log('mask nonzero ratio', nonZero / (w * h))
+
+    // Create fabric image from processed mask (scale back down for correct size)
     fabric.Image.fromURL(maskCanvas.toDataURL(), (maskImg: fabric.Image) => {
       if (!maskImg) return
 
       maskImg.set({
         left: 0,
         top: 0,
-        scaleX: 1,
-        scaleY: 1,
+        scaleX: 1 / dpr,  // scale back down to canvas size
+        scaleY: 1 / dpr,
         angle: 0,
         originX: "left",
         originY: "top",
@@ -393,7 +504,7 @@ function UVEditorCanvasInner({
     maskCanvas.width = canvasWidth
     maskCanvas.height = canvasHeight
 
-    // Draw template at its position
+    // Draw template at its actual position on canvas
     const templateElement = template.getElement() as HTMLImageElement
     if (!templateElement) return
 
@@ -401,32 +512,57 @@ function UVEditorCanvasInner({
     const th = template.height || 1
     const sx = template.scaleX || 1
     const sy = template.scaleY || 1
-    const tx = template.left || 0
-    const ty = template.top || 0
+    const cx = template.left || 0  // center X
+    const cy = template.top || 0   // center Y
 
-    maskCtx.drawImage(templateElement, tx, ty, tw * sx, th * sy)
+    const drawW = tw * sx
+    const drawH = th * sy
+    const drawX = cx - drawW / 2  // top-left X
+    const drawY = cy - drawH / 2  // top-left Y
 
-    // Get image data and apply threshold to shrink base inward
+    maskCtx.clearRect(0, 0, canvasWidth, canvasHeight)
+    maskCtx.drawImage(templateElement, drawX, drawY, drawW, drawH)
+
+    // Get image data and apply morphological erosion to shrink base inward
     const imageData = maskCtx.getImageData(0, 0, canvasWidth, canvasHeight)
     const data = imageData.data
 
-    // Threshold: shrinks base inward (TH = 250)
-    const TH = 250
+    const cw = canvasWidth
+    const ch = canvasHeight
 
-    for (let i = 0; i < data.length; i += 4) {
-      const a = data[i + 3]
+    // Extract alpha into a 1-channel buffer
+    let alpha = new Uint8ClampedArray(cw * ch)
+    for (let p = 0; p < cw * ch; p++) {
+      alpha[p] = data[p * 4 + 3]
+    }
 
-      // Keep RGB white
-      data[i] = 255
-      data[i + 1] = 255
-      data[i + 2] = 255
-
-      // Apply threshold: only keep pixels above threshold
-      if (a >= TH) {
-        data[i + 3] = 255
-      } else {
-        data[i + 3] = 0
+    // Shrink by N pixels (try 1 or 2)
+    const shrink = 2
+    for (let iter = 0; iter < shrink; iter++) {
+      const out = new Uint8ClampedArray(alpha.length)
+      for (let y = 0; y < ch; y++) {
+        for (let x = 0; x < cw; x++) {
+          let m = 255
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = Math.min(cw - 1, Math.max(0, x + dx))
+              const ny = Math.min(ch - 1, Math.max(0, y + dy))
+              m = Math.min(m, alpha[ny * cw + nx])
+            }
+          }
+          out[y * cw + x] = m
+        }
       }
+      alpha = out
+    }
+
+    // Write back as white with that alpha (keeps smooth edges)
+    for (let p = 0; p < cw * ch; p++) {
+      const i = p * 4
+      data[i] = 255       // R
+      data[i + 1] = 255   // G
+      data[i + 2] = 255   // B
+      data[i + 3] = alpha[p] // A
     }
 
     maskCtx.putImageData(imageData, 0, 0)
@@ -480,16 +616,25 @@ function UVEditorCanvasInner({
 
     const canvasWidth = canvas.getWidth()
     const canvasHeight = canvas.getHeight()
-    processCanvas.width = canvasWidth
-    processCanvas.height = canvasHeight
+
+    // Generate at higher resolution for smoother zoom
+    const dpr = window.devicePixelRatio || 1
+    processCanvas.width = canvasWidth * dpr
+    processCanvas.height = canvasHeight * dpr
+    processCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     // Draw template at its position with smoothing enabled
     const tw = template.width || 1
     const th = template.height || 1
     const sx = template.scaleX || 1
     const sy = template.scaleY || 1
-    const tx = template.left || 0
-    const ty = template.top || 0
+    const cx = template.left || 0  // center X
+    const cy = template.top || 0   // center Y
+
+    const drawW = tw * sx
+    const drawH = th * sy
+    const drawX = cx - drawW / 2  // top-left X
+    const drawY = cy - drawH / 2  // top-left Y
 
     // Enable smoothing for smooth edges
     processCtx.imageSmoothingEnabled = true
@@ -497,10 +642,13 @@ function UVEditorCanvasInner({
       (processCtx as any).imageSmoothingQuality = 'high'
     }
 
-    processCtx.drawImage(templateElement, tx, ty, tw * sx, th * sy)
+    processCtx.drawImage(templateElement, drawX, drawY, drawW, drawH)
 
     // Get image data and replace non-transparent pixels with base color
-    const imageData = processCtx.getImageData(0, 0, canvasWidth, canvasHeight)
+    const w = Math.round(canvasWidth * dpr)
+    const h = Math.round(canvasHeight * dpr)
+
+    const imageData = processCtx.getImageData(0, 0, w, h)
     const data = imageData.data
 
     // Convert hex color to RGB (handle both 3 and 6 digit hex)
@@ -512,21 +660,15 @@ function UVEditorCanvasInner({
     const g = parseInt(hex.substring(2, 4), 16)
     const b = parseInt(hex.substring(4, 6), 16)
 
-    // Use threshold to make base color pixels hard (no semi-transparency)
-    const TH = 250 // tune: 240-254, higher = stricter (removes more edge pixels)
-    
+    // Replace non-transparent pixels with base color, preserve anti-aliasing
     for (let i = 0; i < data.length; i += 4) {
       const a = data[i + 3]
-      if (a >= TH) {
-        // Replace fully opaque pixels with base color (hard edges, no semi-transparency)
-        data[i] = r
-        data[i + 1] = g
-        data[i + 2] = b
-        data[i + 3] = 255
-      } else {
-        // Make semi-transparent edge pixels fully transparent
-        data[i + 3] = 0
-      }
+      if (a === 0) continue // keep fully transparent as transparent
+
+      data[i] = r       // R
+      data[i + 1] = g   // G
+      data[i + 2] = b   // B
+      data[i + 3] = a   // preserve antialiasing, covers all non-transparent pixels
     }
 
     processCtx.putImageData(imageData, 0, 0)
@@ -543,8 +685,8 @@ function UVEditorCanvasInner({
       baseColorImg.set({
         left: 0,
         top: 0,
-        scaleX: 1,
-        scaleY: 1,
+        scaleX: 1 / dpr,  // scale back down to canvas size
+        scaleY: 1 / dpr,
         angle: 0,
         selectable: false,
         evented: false,
@@ -556,10 +698,7 @@ function UVEditorCanvasInner({
       canvas.add(baseColorImg)
       baseColorImg.sendToBack()
       baseColorObjectRef.current = baseColorImg as any
-      
-      // Apply shrunk base clip to ensure proper masking
-      applyShrunkBaseClip(baseColorImg)
-      
+
       canvas.requestRenderAll()
     })
   }, [baseColor, baseTextureUrl])
@@ -687,11 +826,7 @@ function UVEditorCanvasInner({
               canvas.requestRenderAll()
             }
           }
-          
-          if (maskEnabled) applyTemplateClip(img)
         })
-        img.on('scaling', () => { if (maskEnabled) applyTemplateClip(img) })
-        img.on('rotating', () => { if (maskEnabled) applyTemplateClip(img) })
 
         layerObjectsRef.current.set(layer.id, img)
         canvas.add(img)
@@ -718,9 +853,17 @@ function UVEditorCanvasInner({
         applyTemplateClip(img)
       } else {
         img.clipPath = undefined
-        canvas.renderAll()
       }
     })
+
+    // Apply or remove mask on base color too
+    if (maskEnabled) {
+      if (baseColorObjectRef.current) applyTemplateClip(baseColorObjectRef.current)
+    } else {
+      if (baseColorObjectRef.current) baseColorObjectRef.current.clipPath = undefined
+    }
+
+    canvas.requestRenderAll()
   }, [maskEnabled])
 
   // Helper function to add an image layer with auto-scaling
@@ -744,21 +887,26 @@ function UVEditorCanvasInner({
       }),
     ])
     
+    // Get real canvas dimensions
+    const canvas = fabricCanvasRef.current
+    if (!canvas) return
+
+    const canvasWidth = canvas.getWidth()
+    const canvasHeight = canvas.getHeight()
+
     // Calculate scale to make uploaded image 50% of template size
-    const canvasWidth = 960
-    const canvasHeight = 640
     const templateWidth = templateImg.width
     const templateHeight = templateImg.height
     const templateScale = Math.min(canvasWidth / templateWidth, canvasHeight / templateHeight)
-    
+
     // Template's displayed size on canvas
     const templateDisplayWidth = templateWidth * templateScale
     const templateDisplayHeight = templateHeight * templateScale
-    
+
     // Target size: 50% of template display size
     const targetWidth = templateDisplayWidth * 0.5
     const targetHeight = templateDisplayHeight * 0.5
-    
+
     // Calculate scale to maintain aspect ratio - use the smaller scale so image fits within 50%
     const uploadedWidth = uploadedImg.width
     const uploadedHeight = uploadedImg.height
@@ -766,10 +914,10 @@ function UVEditorCanvasInner({
     const scaleY = targetHeight / uploadedHeight
     // Use the smaller scale to maintain aspect ratio and ensure image fits
     const scale = Math.min(scaleX, scaleY)
-    
-    // Center the image on the template
-    const x = (canvasWidth - uploadedWidth * scale) / 2
-    const y = (canvasHeight - uploadedHeight * scale) / 2
+
+    // Position at canvas center (objects use originX: 'center', originY: 'center')
+    const x = canvasWidth / 2
+    const y = canvasHeight / 2
     
     const newLayer: Layer = {
       id: `layer-${Date.now()}`,
