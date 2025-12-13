@@ -35,6 +35,7 @@ function UVEditorCanvasInner({
   const baseColorObjectRef = useRef<fabric.Image | null>(null) // Base color image (processed template)
   const [isDragging, setIsDragging] = useState(false)
   const centerGuideLineRef = useRef<fabric.Line | null>(null) // Center guide line
+  const [canvasSize, setCanvasSize] = useState({ width: 960, height: 640 })
 
   useImperativeHandle(ref, () => ({
     exportImage: () => {
@@ -54,12 +55,51 @@ function UVEditorCanvasInner({
     },
   }))
 
+  // Calculate canvas size based on container
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const updateCanvasSize = () => {
+      if (!containerRef.current) return
+
+      const container = containerRef.current
+      // Get available space, accounting for some padding
+      const containerWidth = container.clientWidth - 16
+      const containerHeight = container.clientHeight - 16
+
+      // Maintain 960:640 aspect ratio (3:2)
+      const aspectRatio = 960 / 640
+      let width = containerWidth
+      let height = containerWidth / aspectRatio
+
+      if (height > containerHeight) {
+        height = containerHeight
+        width = containerHeight * aspectRatio
+      }
+
+      // Ensure minimum size
+      width = Math.max(width, 480)
+      height = Math.max(height, 320)
+
+      setCanvasSize({ width: Math.floor(width), height: Math.floor(height) })
+    }
+
+    updateCanvasSize()
+
+    const resizeObserver = new ResizeObserver(updateCanvasSize)
+    resizeObserver.observe(containerRef.current)
+
+    return () => {
+      resizeObserver.disconnect()
+    }
+  }, [])
+
   useEffect(() => {
     if (!canvasRef.current) return
 
     const canvas = new fabric.Canvas(canvasRef.current, {
-      width: 960,
-      height: 640,
+      width: canvasSize.width,
+      height: canvasSize.height,
       backgroundColor: 'transparent',
       enableRetinaScaling: true, // Enable retina/high-DPI support
     })
@@ -246,6 +286,18 @@ function UVEditorCanvasInner({
     }
 
   }, [baseTextureUrl])
+
+  // Resize canvas when size changes
+  useEffect(() => {
+    const canvas = fabricCanvasRef.current
+    if (!canvas) return
+
+    canvas.setDimensions({
+      width: canvasSize.width,
+      height: canvasSize.height,
+    })
+    canvas.renderAll()
+  }, [canvasSize.width, canvasSize.height])
 
   // Apply template clip to image layers with strengthened edge opacity
   const applyTemplateClip = (obj: fabric.Object) => {
@@ -841,11 +893,14 @@ function UVEditorCanvasInner({
     <div className="flex flex-col gap-2 h-full">
       <div 
         ref={containerRef}
-        className={`flex-1 border rounded overflow-hidden bg-[#1a1a1a] flex items-center justify-center relative transition-all ${
+        className={`flex-1 border rounded overflow-auto bg-[#1a1a1a] flex items-center justify-center relative transition-all ${
           isDragging ? 'border-[#3a3a3a] bg-[#ededed]/[0.12]' : 'border-[#2a2a2a]'
         }`}
       >
-        <canvas ref={canvasRef} />
+        <canvas 
+          ref={canvasRef} 
+          style={{ maxWidth: '100%', maxHeight: '100%' }}
+        />
         {isDragging && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#ededed]/[0.12] border-2 border-dashed border-[#3a3a3a] rounded pointer-events-none">
             <div className="text-[#ededed] font-medium text-sm">Drop image here</div>

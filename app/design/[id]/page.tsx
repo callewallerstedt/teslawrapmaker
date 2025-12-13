@@ -298,7 +298,7 @@ export default function DesignPage() {
         />
 
         <div className="flex-1 flex flex-col">
-          <div className="flex-1 bg-transparent rounded-lg border border-[#2a2a2a] overflow-hidden flex flex-col m-4">
+          <div className="flex-1 flex flex-col m-4">
             <div className="flex items-center justify-between p-3 border-b border-[#2a2a2a] flex-shrink-0">
               <h3 className="text-sm font-medium text-[#ededed] tracking-tight">UV Map Editor</h3>
               <div className="flex gap-2 items-center">
@@ -322,7 +322,7 @@ export default function DesignPage() {
                 </button>
               </div>
             </div>
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 p-2 overflow-auto">
               <UVEditorCanvas
                 ref={editorRef}
                 baseTextureUrl={carModel.uvTextureUrl}
