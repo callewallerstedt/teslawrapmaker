@@ -31,4 +31,22 @@ body {
   }
 }
 
+/* Mobile viewport fixes */
+@supports (height: 100dvh) {
+  .min-h-screen {
+    min-height: 100dvh;
+  }
+}
+
+/* Ensure background covers full viewport on mobile */
+html, body {
+  height: 100%;
+}
+
+body {
+  /* Prevent background from being cut off on mobile */
+  background-attachment: fixed;
+  background-size: cover;
+}
+
 /* (No background animations) */
