@@ -8,6 +8,7 @@ interface LayerSidebarProps {
   onLayerUpdate: (layerId: string, updates: Partial<Layer>) => void
   onLayerDelete: (layerId: string) => void
   onLayerAdd: (layer: Layer) => void
+  onAddImageUrl?: (imageUrl: string) => void | Promise<void>
   onLayerReorder: (fromIndex: number, toIndex: number) => void
   baseTextureUrl: string
   baseColor: string | null
@@ -21,6 +22,7 @@ export default function LayerSidebar({
   onLayerUpdate,
   onLayerDelete,
   onLayerAdd,
+  onAddImageUrl,
   onLayerReorder,
   baseTextureUrl,
   baseColor,
@@ -39,6 +41,12 @@ export default function LayerSidebar({
     const reader = new FileReader()
     reader.onload = async (event) => {
       const url = event.target?.result as string
+
+      if (onAddImageUrl) {
+        await onAddImageUrl(url)
+        if (fileInputRef.current) fileInputRef.current.value = ''
+        return
+      }
       
       // Load both images to calculate dimensions
       const uploadedImg = new Image()
@@ -104,7 +112,7 @@ export default function LayerSidebar({
   }
 
   return (
-    <div className="w-56 bg-transparent border-r border-[#2a2a2a] flex flex-col">
+    <div className="w-full md:w-56 bg-transparent border-b md:border-b-0 md:border-r border-[#2a2a2a] flex flex-col md:h-full overflow-hidden md:overflow-visible max-h-[45dvh] md:max-h-none">
       <div className="p-3 border-b border-[#2a2a2a]">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-medium text-[#ededed] tracking-tight">Layers</h3>

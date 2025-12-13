@@ -18,6 +18,12 @@ body {
   letter-spacing: -0.01em;
 }
 
+html,
+body {
+  width: 100%;
+  overflow-x: hidden;
+}
+
 
 @layer utilities {
   .text-balance {
@@ -26,4 +32,3 @@ body {
 }
 
 /* (No background animations) */
-

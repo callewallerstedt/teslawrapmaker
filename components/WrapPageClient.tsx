@@ -37,7 +37,7 @@ export default function WrapPageClient({ wrap, carModelName }: WrapPageClientPro
           {/* Metadata section */}
           <div className="bg-transparent rounded border border-[#2a2a2a] p-4 space-y-4">
             <div>
-              <h1 className="text-2xl font-semibold text-[#ededed] mb-1 tracking-tight">{wrap.title}</h1>
+              <h1 className="text-2xl font-semibold text-[#ededed] mb-1 tracking-tight break-words">{wrap.title}</h1>
               {wrap.username && (
                 <p className="text-sm text-[#a0a0a0] mb-1 font-light">by {wrap.username}</p>
               )}

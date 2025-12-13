@@ -80,13 +80,13 @@ export default function ExplorePage() {
 
       <main className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-6 py-8">
         <div className="mb-8">
-          <h1 className="text-4xl font-semibold text-[#ededed] mb-2 tracking-tight">Explore</h1>
+          <h1 className="text-3xl sm:text-4xl font-semibold text-[#ededed] mb-2 tracking-tight">Explore</h1>
           <p className="text-[#a0a0a0] font-light">Browse EV wraps created by the community</p>
         </div>
 
         {/* Search + Filters */}
         <div className="mb-8 flex flex-col lg:flex-row lg:items-center gap-4">
-          <div className="relative flex-1 max-w-md">
+          <div className="relative flex-1 max-w-none sm:max-w-md">
             <svg
               className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-[#707070]"
               fill="none"
@@ -109,8 +109,8 @@ export default function ExplorePage() {
             />
           </div>
 
-          <div className="flex gap-3">
-            <div className="w-48">
+          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+            <div className="w-full sm:w-48">
               <div className="relative">
                 <select
                   value={selectedModelId}
@@ -137,7 +137,7 @@ export default function ExplorePage() {
               </div>
             </div>
 
-            <div className="w-40">
+            <div className="w-full sm:w-40">
               <div className="relative">
                 <select
                   value={sortBy}

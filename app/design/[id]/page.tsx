@@ -129,12 +129,13 @@ export default function DesignPage() {
     <div className="min-h-screen bg-[#1a1a1a]">
       <Navigation currentPath="/design" />
 
-      <div className="flex h-[calc(100vh-4rem)]">
+      <div className="flex flex-col md:flex-row md:h-[calc(100dvh-3rem)] min-h-[calc(100dvh-3rem)]">
         <LayerSidebar
           layers={layers}
           onLayerUpdate={handleLayerUpdate}
           onLayerDelete={handleLayerDelete}
           onLayerAdd={handleLayerAdd}
+          onAddImageUrl={(imageUrl) => editorRef.current?.addImageLayer(imageUrl)}
           onLayerReorder={handleLayerReorder}
           baseTextureUrl={carModel?.uvTextureUrl || ''}
           baseColor={baseColor}
@@ -144,10 +145,10 @@ export default function DesignPage() {
         />
 
         <div className="flex-1 flex flex-col">
-          <div className="flex-1 flex flex-col m-4">
-            <div className="flex items-center justify-between p-3 border-b border-[#2a2a2a] flex-shrink-0">
+          <div className="flex-1 flex flex-col m-2 sm:m-4 min-h-[50dvh] md:min-h-0">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3 border-b border-[#2a2a2a] flex-shrink-0">
               <h3 className="text-sm font-medium text-[#ededed] tracking-tight">UV Map Editor</h3>
-              <div className="flex gap-2 items-center">
+              <div className="flex flex-wrap gap-2 items-center justify-start sm:justify-end">
                 <button
                   onClick={handleDownload}
                   className="px-3 py-1.5 text-sm font-medium text-[#ededed] rounded border border-[#2a2a2a] bg-[#ededed]/[0.12] hover:bg-[#ededed]/[0.18] hover:border-[#3a3a3a] transition-all flex items-center gap-2"
@@ -168,7 +169,7 @@ export default function DesignPage() {
                 </button>
               </div>
             </div>
-            <div className="flex-1 p-2 overflow-auto">
+            <div className="flex-1 p-2 overflow-hidden">
               <UVEditorCanvas
                 ref={editorRef}
                 baseTextureUrl={carModel.uvTextureUrl}

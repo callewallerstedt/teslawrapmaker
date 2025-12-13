@@ -35,7 +35,7 @@ export default function PublishModal({ isOpen, onClose, onPublish }: PublishModa
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 backdrop-blur-sm">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 backdrop-blur-sm p-4">
       <div className="bg-[#1a1a1a] rounded border border-[#2a2a2a] p-6 w-full max-w-md">
         <h2 className="text-2xl font-semibold mb-4 text-[#ededed] tracking-tight">Publish Your Wrap</h2>
         <form onSubmit={handleSubmit}>
@@ -97,4 +97,3 @@ export default function PublishModal({ isOpen, onClose, onPublish }: PublishModa
     </div>
   )
 }
-

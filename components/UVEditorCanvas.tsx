@@ -16,6 +16,7 @@ interface UVEditorCanvasProps {
 
 export interface UVEditorCanvasHandle {
   exportImage: () => string | null
+  addImageLayer: (imageUrl: string) => Promise<void>
 }
 
 function UVEditorCanvasInner({
@@ -36,81 +37,78 @@ function UVEditorCanvasInner({
   const [isDragging, setIsDragging] = useState(false)
   const centerGuideLineRef = useRef<fabric.Line | null>(null) // Center guide line
   const [canvasSize, setCanvasSize] = useState({ width: 960, height: 640 })
+  const exportImage = useCallback(() => {
+    const canvas = fabricCanvasRef.current
+    if (!canvas) return null
 
-  useImperativeHandle(ref, () => ({
-    exportImage: () => {
-      const canvas = fabricCanvasRef.current
-      if (!canvas) return null
+    // Use the displayed template that the user is aligning against
+    const bg = canvas.backgroundImage as fabric.Image | undefined
+    if (!bg) return null
 
-      // Use the displayed template that the user is aligning against
-      const bg = canvas.backgroundImage as fabric.Image | undefined
-      if (!bg) return null
+    canvas.discardActiveObject()
+    canvas.getObjects().forEach((o) => o.setCoords())
 
-      canvas.discardActiveObject()
-      canvas.getObjects().forEach((o) => o.setCoords())
+    // Fabric 5 export uses `viewportTransform` (pan/zoom) by default.
+    // For texture export we must ignore the viewport so output always matches the template coordinates.
+    const prevVpt = (canvas.viewportTransform || [1, 0, 0, 1, 0, 0]).slice()
+    const prevBgColor = canvas.backgroundColor
+    const prevBgVpt = (canvas as any).backgroundVpt
 
-      // Fabric 5 export uses `viewportTransform` (pan/zoom) by default.
-      // For texture export we must ignore the viewport so output always matches the template coordinates.
-      const prevVpt = (canvas.viewportTransform || [1, 0, 0, 1, 0, 0]).slice()
-      const prevBgColor = canvas.backgroundColor
-      const prevBgVpt = (canvas as any).backgroundVpt
+    // Template rect in canvas coordinates (world coords)
+    const iw = bg.width || 1
+    const ih = bg.height || 1
+    const sx = bg.scaleX || 1
+    const sy = bg.scaleY || 1
+    const cx = bg.left || 0
+    const cy = bg.top || 0
 
-      // Template rect in canvas coordinates (world coords)
-      const iw = bg.width || 1
-      const ih = bg.height || 1
-      const sx = bg.scaleX || 1
-      const sy = bg.scaleY || 1
-      const cx = bg.left || 0
-      const cy = bg.top || 0
+    const cropW = iw * sx
+    const cropH = ih * sy
+    const cropL = cx - cropW / 2
+    const cropT = cy - cropH / 2
 
-      const cropW = iw * sx
-      const cropH = ih * sy
-      const cropL = cx - cropW / 2
-      const cropT = cy - cropH / 2
+    // Multiplier that makes the cropped output exactly iw x ih pixels.
+    // Background is uniformly scaled (scaleX === scaleY), so a single multiplier is correct.
+    const multiplier = 1 / sx
 
-      // Multiplier that makes the cropped output exactly iw x ih pixels.
-      // Background is uniformly scaled (scaleX === scaleY), so a single multiplier is correct.
-      const multiplier = 1 / sx
-
-      // Temporarily hide helper objects (e.g. snap guide line) during export
-      const hidden: { obj: fabric.Object; visible: boolean | undefined }[] = []
-      canvas.getObjects().forEach((obj) => {
-        if ((obj as any).excludeFromExport) {
-          hidden.push({ obj, visible: obj.visible })
-          obj.visible = false
-        }
-      })
-
-      try {
-        // Ignore viewport pan/zoom so export is always in template space
-        canvas.setViewportTransform([1, 0, 0, 1, 0, 0])
-        ;(canvas as any).backgroundVpt = true
-
-        // Export with transparent background (no editor dark gray)
-        canvas.backgroundColor = 'transparent'
-        canvas.renderAll()
-
-        return canvas.toDataURL({
-          format: 'png',
-          left: cropL,
-          top: cropT,
-          width: cropW,
-          height: cropH,
-          multiplier,
-          enableRetinaScaling: false, // avoid devicePixelRatio scaling
-        } as any)
-      } finally {
-        // Restore visibility and canvas state
-        hidden.forEach(({ obj, visible }) => {
-          obj.visible = visible
-        })
-        canvas.backgroundColor = prevBgColor
-        ;(canvas as any).backgroundVpt = prevBgVpt
-        canvas.setViewportTransform(prevVpt as any)
-        canvas.renderAll()
+    // Temporarily hide helper objects (e.g. snap guide line) during export
+    const hidden: { obj: fabric.Object; visible: boolean | undefined }[] = []
+    canvas.getObjects().forEach((obj) => {
+      if ((obj as any).excludeFromExport) {
+        hidden.push({ obj, visible: obj.visible })
+        obj.visible = false
       }
-    },
-  }))
+    })
+
+    try {
+      // Ignore viewport pan/zoom so export is always in template space
+      canvas.setViewportTransform([1, 0, 0, 1, 0, 0])
+      ;(canvas as any).backgroundVpt = true
+
+      // Export with transparent background (no editor dark gray)
+      canvas.backgroundColor = 'transparent'
+      canvas.renderAll()
+
+      return canvas.toDataURL({
+        format: 'png',
+        left: cropL,
+        top: cropT,
+        width: cropW,
+        height: cropH,
+        multiplier,
+        enableRetinaScaling: false, // avoid devicePixelRatio scaling
+      } as any)
+    } finally {
+      // Restore visibility and canvas state
+      hidden.forEach(({ obj, visible }) => {
+        obj.visible = visible
+      })
+      canvas.backgroundColor = prevBgColor
+      ;(canvas as any).backgroundVpt = prevBgVpt
+      canvas.setViewportTransform(prevVpt as any)
+      canvas.renderAll()
+    }
+  }, [])
 
   // Calculate canvas size based on container
   useEffect(() => {
@@ -134,9 +132,9 @@ function UVEditorCanvasInner({
         width = containerHeight * aspectRatio
       }
 
-      // Ensure minimum size
-      width = Math.max(width, 480)
-      height = Math.max(height, 320)
+      // Avoid zero-size canvases on extremely small containers
+      width = Math.max(width, 1)
+      height = Math.max(height, 1)
 
       setCanvasSize({ width: Math.floor(width), height: Math.floor(height) })
     }
@@ -932,6 +930,15 @@ function UVEditorCanvasInner({
     onLayerAdd(newLayer)
   }, [baseTextureUrl, onLayerAdd])
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      exportImage,
+      addImageLayer,
+    }),
+    [exportImage, addImageLayer]
+  )
+
   // Handle drag and drop
   useEffect(() => {
     const container = containerRef.current
@@ -1054,10 +1061,10 @@ function UVEditorCanvasInner({
             <div className="text-[#ededed] font-medium text-sm">Drop image here</div>
           </div>
         )}
-        <div className="absolute bottom-2 right-2 text-xs text-[#707070] bg-[#1a1a1a]/90 px-2 py-1 rounded backdrop-blur-sm font-light">
+        <div className="hidden sm:block absolute bottom-2 right-2 text-xs text-[#707070] bg-[#1a1a1a]/90 px-2 py-1 rounded backdrop-blur-sm font-light">
           Pan: Ctrl+Drag or Middle Mouse | Zoom: Mouse Wheel
         </div>
-        <div className="absolute top-2 left-2 text-xs text-[#707070] bg-[#1a1a1a]/90 px-2 py-1 rounded backdrop-blur-sm font-light">
+        <div className="hidden sm:block absolute top-2 left-2 text-xs text-[#707070] bg-[#1a1a1a]/90 px-2 py-1 rounded backdrop-blur-sm font-light">
           Drag & Drop images or press Ctrl+V to paste
         </div>
       </div>
