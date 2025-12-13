@@ -26,16 +26,6 @@ export default function Navigation({ currentPath = '/' }: NavigationProps) {
           {/* Navigation Tabs */}
           <div className="flex w-full sm:w-auto gap-0">
             <Link
-              href="/"
-              className={`flex-1 sm:flex-none text-center px-3 sm:px-4 py-2 text-sm font-medium transition-all ${
-                isActive('/')
-                  ? 'text-[#ededed] border-b-2 border-[#ededed] bg-[#ededed]/[0.08]'
-                  : 'text-[#a0a0a0] hover:text-[#ededed] border-b-2 border-transparent hover:bg-[#ededed]/[0.05]'
-              }`}
-            >
-              Home
-            </Link>
-            <Link
               href="/explore"
               className={`flex-1 sm:flex-none text-center px-3 sm:px-4 py-2 text-sm font-medium transition-all ${
                 isActive('/explore')
