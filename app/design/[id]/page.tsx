@@ -77,6 +77,13 @@ export default function DesignPage() {
     if (!carModel || layers.length === 0) return
 
     try {
+      // Ensure published exports are always masked
+      if (!maskEnabled) {
+        setMaskEnabled(true)
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      }
+
       const dataUrl = editorRef.current?.exportImage()
       if (!dataUrl) {
         throw new Error('Editor is not ready to export yet.')
@@ -159,7 +166,10 @@ export default function DesignPage() {
                   Download
                 </button>
                 <button
-                  onClick={() => setIsPublishModalOpen(true)}
+                  onClick={() => {
+                    setMaskEnabled(true)
+                    setIsPublishModalOpen(true)
+                  }}
                   className="px-3 py-1.5 text-sm font-medium text-[#ededed] rounded border border-[#2a2a2a] bg-[#ededed]/[0.12] hover:bg-[#ededed]/[0.18] hover:border-[#3a3a3a] transition-all flex items-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
