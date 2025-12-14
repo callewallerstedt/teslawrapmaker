@@ -34,6 +34,15 @@ export default function HomePage() {
               Create Your Own
             </Link>
           </div>
+
+          <div className="mt-6 flex justify-center">
+            <Link
+              href="/license-plate"
+              className="px-6 py-3 text-base font-medium text-[#ededed] rounded-lg border-2 border-[#2a2a2a] bg-[#ededed]/[0.12] hover:bg-[#ededed]/[0.18] hover:border-[#3a3a3a] transition-all transform hover:scale-105"
+            >
+              Create a licence plate
+            </Link>
+          </div>
         </div>
       </main>
 
