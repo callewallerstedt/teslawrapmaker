@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { getWrap, getCarModel } from '@/lib/db'
 import WrapPageClient from '@/components/WrapPageClient'
 import Navigation from '@/components/Navigation'
@@ -10,6 +11,15 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 export async function generateMetadata({ params }: { params: { id: string } }): Promise<Metadata> {
+  const headerList = headers()
+  const host = headerList.get('x-forwarded-host') || headerList.get('host')
+  const proto = headerList.get('x-forwarded-proto') || (process.env.NODE_ENV === 'development' ? 'http' : 'https')
+  const baseUrl =
+    (host ? `${proto}://${host}` : null) ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+    'http://localhost:3000'
+
   const wrap = await getWrap(params.id)
   if (!wrap) {
     return {
@@ -24,8 +34,8 @@ export async function generateMetadata({ params }: { params: { id: string } }): 
     wrap.description ||
     `A custom wrap for ${carModel?.name || wrap.carModelId}${wrap.username ? ` by ${wrap.username}` : ''}.`
 
-  const imageUrl = `/api/og/wrap/${wrap.id}`
-  const canonical = `/wrap/${wrap.id}`
+  const imageUrl = new URL(`/api/og/wrap/${wrap.id}`, baseUrl).toString()
+  const canonical = new URL(`/wrap/${wrap.id}`, baseUrl).toString()
 
   return {
     title,
@@ -39,8 +49,8 @@ export async function generateMetadata({ params }: { params: { id: string } }): 
       images: [
         {
           url: imageUrl,
-          width: 1024,
-          height: 1024,
+          width: 1200,
+          height: 630,
           alt: title,
         },
       ],
