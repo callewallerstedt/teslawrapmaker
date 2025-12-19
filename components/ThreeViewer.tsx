@@ -61,3 +61,4 @@ export default function ThreeViewer({ modelUrl, textureUrl }: ThreeViewerProps) 
 
 
 
+

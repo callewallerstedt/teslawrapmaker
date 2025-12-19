@@ -15,6 +15,16 @@ export interface Layer {
   scaleY: number
   rotation: number
   opacity: number
+  recolor?: string | null // hex color, e.g. #ff0000
+  totalRecolor?: boolean // replace all non-transparent pixels with recolor
+  flipX?: boolean // mirror horizontally
+  flipY?: boolean // mirror vertically
+  crop?: {
+    x: number // source pixels from left
+    y: number // source pixels from top
+    width: number // source pixels
+    height: number // source pixels
+  } | null
 }
 
 export interface Wrap {
@@ -34,5 +44,3 @@ export interface TextureMergeRequest {
   baseTextureUrl: string
   layers: Layer[]
 }
-
-

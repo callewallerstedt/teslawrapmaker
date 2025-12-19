@@ -1,32 +1,42 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import type { Wrap, CarModel } from '@/lib/types'
 import Navigation from '@/components/Navigation'
+import LiquidBackground from '@/components/LiquidBackground'
+
+const PAGE_SIZE = 12 // ~3 rows on xl (4 cols)
+
+function shuffle<T>(arr: T[]) {
+  const out = [...arr]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
+}
 
 export default function ExplorePage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [wraps, setWraps] = useState<Wrap[]>([])
   const [carModels, setCarModels] = useState<CarModel[]>([])
+  const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedModelId, setSelectedModelId] = useState('')
-  const [sortBy, setSortBy] = useState<'random' | 'most-liked' | 'latest'>('latest')
+  const [sortBy, setSortBy] = useState<'random' | 'most-liked' | 'latest'>('most-liked')
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const loadMoreRef = useRef<HTMLDivElement | null>(null)
+  const requestSeqRef = useRef(0)
 
   useEffect(() => {
     async function loadData() {
       try {
-        // Fetch wraps via API so the server-side DB helper is used
-        const wrapsRes = await fetch('/api/wraps')
-        if (wrapsRes.ok) {
-          const wrapsData: Wrap[] = await wrapsRes.json()
-          setWraps(wrapsData)
-        } else {
-          console.error('Failed to fetch wraps:', wrapsRes.status, wrapsRes.statusText)
-        }
-
         // Fetch car models via API (static from public folder)
         const modelsRes = await fetch('/api/car-models')
         if (modelsRes.ok) {
@@ -37,12 +47,81 @@ export default function ExplorePage() {
         }
       } catch (error) {
         console.error('Failed to load explore data:', error)
-      } finally {
-        setLoading(false)
       }
     }
     loadData()
   }, [])
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(searchInput.trim()), 250)
+    return () => clearTimeout(t)
+  }, [searchInput])
+
+  useEffect(() => {
+    const q = (searchParams.get('query') || '').trim()
+    const model = (searchParams.get('carModelId') || '').trim()
+    const sort = (searchParams.get('sort') || '').trim()
+
+    setSearchInput(q)
+    setSelectedModelId(model)
+    if (sort === 'latest' || sort === 'most-liked' || sort === 'random') {
+      setSortBy(sort as any)
+    }
+  }, [searchParams])
+
+  const fetchWrapsPage = async (offset: number, replace: boolean) => {
+    const seq = ++requestSeqRef.current
+    const params = new URLSearchParams()
+    params.set('limit', String(PAGE_SIZE))
+    params.set('offset', String(offset))
+    params.set('sort', sortBy === 'latest' ? 'latest' : 'most-liked')
+    if (searchQuery) params.set('query', searchQuery)
+    if (selectedModelId) params.set('carModelId', selectedModelId)
+
+    const res = await fetch(`/api/wraps?${params.toString()}`)
+    if (!res.ok) throw new Error(`Failed to fetch wraps (${res.status})`)
+    const data: Wrap[] = await res.json()
+    if (seq !== requestSeqRef.current) return
+
+    setWraps((prev) => {
+      const next = replace ? data : [...prev, ...data]
+      return sortBy === 'random' ? shuffle(next) : next
+    })
+    setHasMore(data.length === PAGE_SIZE)
+  }
+
+  useEffect(() => {
+    setLoading(true)
+    setHasMore(true)
+    setWraps([])
+    fetchWrapsPage(0, true)
+      .catch((error) => console.error('Failed to fetch wraps:', error))
+      .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, selectedModelId, sortBy])
+
+  useEffect(() => {
+    if (!hasMore) return
+    if (loading || loadingMore) return
+    const el = loadMoreRef.current
+    if (!el) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        if (!entry?.isIntersecting) return
+        setLoadingMore(true)
+        fetchWrapsPage(wraps.length, false)
+          .catch((error) => console.error('Failed to load more wraps:', error))
+          .finally(() => setLoadingMore(false))
+      },
+      { rootMargin: '800px 0px' },
+    )
+
+    observer.observe(el)
+    return () => observer.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMore, loading, loadingMore, wraps.length])
 
   const carModelNameById = useMemo(() => {
     const map: Record<string, string> = {}
@@ -52,33 +131,12 @@ export default function ExplorePage() {
     return map
   }, [carModels])
 
-  const filteredWraps = (() => {
-    // First filter
-    const filtered = wraps.filter((wrap) => {
-      const matchesSearch = wrap.title.toLowerCase().includes(searchQuery.toLowerCase())
-      const matchesModel = !selectedModelId || wrap.carModelId === selectedModelId
-      return matchesSearch && matchesModel
-    })
-
-    // Then sort
-    switch (sortBy) {
-      case 'random':
-        return [...filtered].sort(() => Math.random() - 0.5)
-      case 'most-liked':
-        return [...filtered].sort((a, b) => (b.likes || 0) - (a.likes || 0))
-      case 'latest':
-      default:
-        return [...filtered].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    }
-  })()
-
-  console.log('Filtered wraps:', filteredWraps.length, 'out of', wraps.length)
-
   return (
-    <div className="min-h-screen bg-[#1a1a1a]">
+    <div className="min-h-screen bg-[#1a1a1a] relative">
+      <LiquidBackground opacity={0.5} />
       <Navigation currentPath="/explore" />
 
-      <main className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-6 py-8">
+      <main className="relative z-10 max-w-7xl mx-auto px-3 sm:px-5 lg:px-6 py-8">
         <div className="mb-8">
           <h1 className="text-3xl sm:text-4xl font-semibold text-[#ededed] mb-2 tracking-tight">Explore</h1>
           <p className="text-[#a0a0a0] font-light">Browse EV wraps created by the community</p>
@@ -103,8 +161,8 @@ export default function ExplorePage() {
             <input
               type="text"
               placeholder="Search wraps..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 bg-[#ededed]/[0.12] border border-[#2a2a2a] rounded text-[#ededed] placeholder-[#707070] focus:outline-none focus:border-[#3a3a3a] focus:bg-[#ededed]/[0.18] transition-all font-light"
             />
           </div>
@@ -167,7 +225,7 @@ export default function ExplorePage() {
           <div className="flex items-center justify-center py-20">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#ededed]"></div>
           </div>
-        ) : filteredWraps.length === 0 ? (
+        ) : wraps.length === 0 ? (
           <div className="text-center py-20">
             <svg
               className="w-16 h-16 mx-auto text-[#707070] mb-4"
@@ -195,19 +253,22 @@ export default function ExplorePage() {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filteredWraps.map((wrap) => (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {wraps.map((wrap) => (
               <Link
                 key={wrap.id}
                 href={`/wrap/${wrap.id}`}
                 className="group bg-transparent rounded border border-[#2a2a2a] overflow-hidden hover:border-[#3a3a3a] transition-all hover:bg-[#ededed]/[0.05]"
               >
-                <div className="aspect-video bg-[#1a1a1a] relative overflow-hidden">
+                <div className="aspect-square bg-[#1a1a1a] relative overflow-hidden p-3">
                   {wrap.textureUrl ? (
                     <img
-                      src={wrap.textureUrl}
+                      src={wrap.previewRenderUrl || wrap.textureUrl}
                       alt={wrap.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      className="w-full h-full object-contain group-hover:scale-[1.02] transition-transform duration-300"
+                      loading="lazy"
+                      decoding="async"
                       onError={(e) => {
                         console.error('Image failed to load:', wrap.textureUrl, e)
                         // Fallback if image fails to load
@@ -264,8 +325,19 @@ export default function ExplorePage() {
                   </div>
                 </div>
               </Link>
-            ))}
-          </div>
+              ))}
+            </div>
+
+            {hasMore && (
+              <div ref={loadMoreRef} className="flex items-center justify-center py-10">
+                {loadingMore ? (
+                  <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#ededed]"></div>
+                ) : (
+                  <div className="text-xs text-[#707070] font-light">Scroll to load more</div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>

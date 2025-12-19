@@ -22,6 +22,7 @@ export async function POST(request: NextRequest) {
     const useSupabase = !!process.env.NEXT_PUBLIC_SUPABASE_URL
 
     let textureUrl: string
+    let previewRenderUrl: string | null = null
 
     if (useSupabase) {
       // Compress image using Sharp before uploading
@@ -37,6 +38,11 @@ export async function POST(request: NextRequest) {
         })
         .toBuffer()
 
+      const previewBuffer = await sharp(buffer)
+        .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 72 })
+        .toBuffer()
+
       console.log(`Compressed: ${buffer.length} → ${compressedBuffer.length} bytes (${Math.round((1 - compressedBuffer.length / buffer.length) * 100)}% reduction)`)
 
       // Upload compressed image to Supabase Storage
@@ -48,6 +54,7 @@ export async function POST(request: NextRequest) {
         .from('wraps')
         .upload(filePath, compressedBuffer, {
           contentType: 'image/png',
+          cacheControl: '31536000',
           upsert: false,
         })
 
@@ -64,6 +71,23 @@ export async function POST(request: NextRequest) {
         .getPublicUrl(filePath)
 
       textureUrl = urlData.publicUrl
+
+      // Upload preview (used for grids/home to reduce bandwidth)
+      const previewPath = `previews/${fileName.replace(/\\.png$/i, '.webp')}`
+      const { error: previewError } = await supabase.storage
+        .from('wraps')
+        .upload(previewPath, previewBuffer, {
+          contentType: 'image/webp',
+          cacheControl: '31536000',
+          upsert: false,
+        })
+
+      if (previewError) {
+        console.warn('Preview upload failed:', previewError)
+      } else {
+        const { data: previewUrlData } = supabase.storage.from('wraps').getPublicUrl(previewPath)
+        previewRenderUrl = previewUrlData.publicUrl
+      }
     } else {
       // Fallback: compress even for data URLs
       const bytes = await textureFile.arrayBuffer()
@@ -79,6 +103,12 @@ export async function POST(request: NextRequest) {
 
       const base64 = compressedBuffer.toString('base64')
       textureUrl = `data:image/png;base64,${base64}`
+
+      const previewBuffer = await sharp(buffer)
+        .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 72 })
+        .toBuffer()
+      previewRenderUrl = `data:image/webp;base64,${previewBuffer.toString('base64')}`
     }
 
     // Save wrap row directly into Supabase table
@@ -89,7 +119,7 @@ export async function POST(request: NextRequest) {
       .insert({
         car_model_id: carModelId,
         texture_url: textureUrl,
-        preview_render_url: null,
+        preview_render_url: previewRenderUrl,
         title,
         description: description || null,
         username: username || null,

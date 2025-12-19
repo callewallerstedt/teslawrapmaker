@@ -17,6 +17,7 @@ export default function DesignPage() {
   const [showDonationModal, setShowDonationModal] = useState(false)
   const [baseColor, setBaseColor] = useState<string | null>(null)
   const [maskEnabled, setMaskEnabled] = useState(false)
+  const [autoSelectLayerId, setAutoSelectLayerId] = useState<string | null>(null)
   const editorRef = useRef<UVEditorCanvasHandle>(null)
 
   useEffect(() => {
@@ -38,6 +39,45 @@ export default function DesignPage() {
 
   const handleLayerAdd = (layer: Layer) => {
     setLayers((prev) => [...prev, layer])
+  }
+
+  const handleLayerDuplicate = (layerId: string) => {
+    setLayers((prev) => {
+      const src = prev.find((l) => l.id === layerId)
+      if (!src) return prev
+      const cloned: Layer = {
+        ...src,
+        id: `layer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        x: (src.x || 0) + 20,
+        y: (src.y || 0) + 20,
+      }
+      setAutoSelectLayerId(cloned.id)
+      return [...prev, cloned]
+    })
+  }
+
+  const handleLayerMirror = (layerId: string) => {
+    // Mirror over the canvas center line by duplicating the layer and flipping it horizontally.
+    const canvasWidth = editorRef.current?.getCanvasWidth() ?? 960
+    const centerX = canvasWidth / 2
+
+    setLayers((prev) => {
+      const src = prev.find((l) => l.id === layerId)
+      if (!src) return prev
+
+      const cloned: Layer = {
+        ...src,
+        id: `layer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        x: centerX * 2 - (src.x || 0),
+        flipX: !src.flipX,
+      }
+      setAutoSelectLayerId(cloned.id)
+      return [...prev, cloned]
+    })
+  }
+
+  const handleLayerSelect = (layerId: string) => {
+    editorRef.current?.selectLayer(layerId)
   }
 
   const handleLayerDelete = (layerId: string) => {
@@ -141,6 +181,10 @@ export default function DesignPage() {
           layers={layers}
           onLayerUpdate={handleLayerUpdate}
           onLayerDelete={handleLayerDelete}
+          onLayerDuplicate={handleLayerDuplicate}
+          onLayerMirror={handleLayerMirror}
+          onLayerCrop={(layerId) => editorRef.current?.startCrop(layerId)}
+          onLayerSelect={handleLayerSelect}
           onLayerAdd={handleLayerAdd}
           onAddImageUrl={(imageUrl) => editorRef.current?.addImageLayer(imageUrl)}
           onLayerReorder={handleLayerReorder}
@@ -189,6 +233,8 @@ export default function DesignPage() {
                 onLayerDelete={handleLayerDelete}
                 baseColor={baseColor}
                 maskEnabled={maskEnabled}
+                autoSelectLayerId={autoSelectLayerId}
+                onAutoSelectLayerHandled={() => setAutoSelectLayerId(null)}
               />
             </div>
           </div>

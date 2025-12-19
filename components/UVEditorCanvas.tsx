@@ -12,11 +12,17 @@ interface UVEditorCanvasProps {
   onLayerDelete: (layerId: string) => void
   baseColor?: string | null // Base color for the template (hex color or null)
   maskEnabled: boolean
+  autoSelectLayerId?: string | null
+  onAutoSelectLayerHandled?: () => void
 }
 
 export interface UVEditorCanvasHandle {
   exportImage: () => string | null
   addImageLayer: (imageUrl: string) => Promise<void>
+  mirrorLayer: (layerId: string) => void
+  startCrop: (layerId: string) => void
+  selectLayer: (layerId: string) => void
+  getCanvasWidth: () => number | null
 }
 
 function UVEditorCanvasInner({
@@ -27,8 +33,10 @@ function UVEditorCanvasInner({
   onLayerDelete,
   baseColor,
   maskEnabled,
+  autoSelectLayerId,
+  onAutoSelectLayerHandled,
 }: UVEditorCanvasProps, ref: React.Ref<UVEditorCanvasHandle>) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const canvasMountRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const fabricCanvasRef = useRef<fabric.Canvas | null>(null)
   const templateOverlayRef = useRef<fabric.Image | null>(null)
@@ -37,6 +45,110 @@ function UVEditorCanvasInner({
   const [isDragging, setIsDragging] = useState(false)
   const centerGuideLineRef = useRef<fabric.Line | null>(null) // Center guide line
   const [canvasSize, setCanvasSize] = useState({ width: 960, height: 640 })
+  const layerClipboardRef = useRef<Layer | null>(null)
+  const recolorCacheRef = useRef<Map<string, string>>(new Map())
+  const pendingSelectLayerIdRef = useRef<string | null>(null)
+  const selectedLayerIdRef = useRef<string | null>(null)
+  const layersRef = useRef<Layer[]>([])
+  const cropSessionRef = useRef<{
+    layerId: string
+    original: fabric.Image
+    originalVisible: boolean | undefined
+    originalSelectable: boolean | undefined
+    originalEvented: boolean | undefined
+    originalClipPath: fabric.Object | undefined | null
+    overlayImg: fabric.Image
+    cropRect: fabric.Rect
+    fullW: number
+    fullH: number
+  } | null>(null)
+  const [cropLayerId, setCropLayerId] = useState<string | null>(null)
+
+  const parseHexColor = (hex: string) => {
+    const cleaned = hex.trim().replace('#', '')
+    const expanded = cleaned.length === 3 ? cleaned.split('').map((c) => c + c).join('') : cleaned
+    const value = parseInt(expanded.padEnd(6, '0').slice(0, 6), 16)
+    return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 }
+  }
+
+  const recolorImageUrl = useCallback(async (imageUrl: string, color: string, totalRecolor: boolean) => {
+    const cacheKey = `${imageUrl}|${color}|${totalRecolor ? '1' : '0'}`
+    const cached = recolorCacheRef.current.get(cacheKey)
+    if (cached) return cached
+
+    try {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.src = imageUrl
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error('Failed to load image'))
+        if (img.complete) resolve()
+      })
+
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth || img.width
+      canvas.height = img.naturalHeight || img.height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return imageUrl
+      ctx.drawImage(img, 0, 0)
+
+      const { r, g, b } = parseHexColor(color)
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const data = imageData.data
+
+      if (totalRecolor) {
+        for (let i = 0; i < data.length; i += 4) {
+          const a = data[i + 3]
+          if (a === 0) continue
+          data[i] = r
+          data[i + 1] = g
+          data[i + 2] = b
+        }
+      } else {
+        for (let i = 0; i < data.length; i += 4) {
+          const a = data[i + 3]
+          if (a === 0) continue
+          data[i] = Math.round((data[i] * r) / 255)
+          data[i + 1] = Math.round((data[i + 1] * g) / 255)
+          data[i + 2] = Math.round((data[i + 2] * b) / 255)
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0)
+      const out = canvas.toDataURL('image/png')
+      recolorCacheRef.current.set(cacheKey, out)
+      return out
+    } catch {
+      return imageUrl
+    }
+  }, [])
+
+  useEffect(() => {
+    const canvas = fabricCanvasRef.current
+    if (!canvas) return
+
+    const syncSelected = () => {
+      const active = canvas.getActiveObject() as any
+      selectedLayerIdRef.current = active?.layerId ?? null
+    }
+
+    canvas.on('selection:created', syncSelected)
+    canvas.on('selection:updated', syncSelected)
+    canvas.on('selection:cleared', () => {
+      selectedLayerIdRef.current = null
+    })
+
+    return () => {
+      canvas.off('selection:created', syncSelected)
+      canvas.off('selection:updated', syncSelected)
+      canvas.off('selection:cleared')
+    }
+  }, [])
+
+  useEffect(() => {
+    layersRef.current = layers
+  }, [layers])
   const exportImage = useCallback(() => {
     const canvas = fabricCanvasRef.current
     if (!canvas) return null
@@ -68,8 +180,10 @@ function UVEditorCanvasInner({
     const cropT = cy - cropH / 2
 
     // Multiplier that makes the cropped output exactly iw x ih pixels.
-    // Background is uniformly scaled (scaleX === scaleY), so a single multiplier is correct.
-    const multiplier = 1 / sx
+    // Using cropW/cropH reduces floating-point drift that can produce 1023px exports.
+    const multiplierW = iw / cropW
+    const multiplierH = ih / cropH
+    const multiplier = (multiplierW + multiplierH) / 2
 
     // Temporarily hide helper objects (e.g. snap guide line) during export
     const hidden: { obj: fabric.Object; visible: boolean | undefined }[] = []
@@ -109,6 +223,313 @@ function UVEditorCanvasInner({
       canvas.renderAll()
     }
   }, [])
+
+  const getLayerById = useCallback((layerId: string) => layers.find((l) => l.id === layerId) || null, [layers])
+
+  const applyLayerCropToImageObject = useCallback((img: fabric.Image, layer: Layer) => {
+    const el = img.getElement() as HTMLImageElement | null
+    const fullW = el?.naturalWidth || el?.width || img.width || 1
+    const fullH = el?.naturalHeight || el?.height || img.height || 1
+
+    const crop = layer.crop
+    if (crop && crop.width > 0 && crop.height > 0) {
+      const cropX = Math.max(0, Math.min(fullW - 1, crop.x))
+      const cropY = Math.max(0, Math.min(fullH - 1, crop.y))
+      const cropW = Math.max(1, Math.min(fullW - cropX, crop.width))
+      const cropH = Math.max(1, Math.min(fullH - cropY, crop.height))
+      img.set({
+        cropX,
+        cropY,
+        width: cropW,
+        height: cropH,
+      } as any)
+    } else {
+      img.set({
+        cropX: 0,
+        cropY: 0,
+        width: fullW,
+        height: fullH,
+      } as any)
+    }
+  }, [])
+
+  const endCropSession = useCallback(
+    (action: 'apply' | 'cancel' | 'reset') => {
+      const canvas = fabricCanvasRef.current
+      const session = cropSessionRef.current
+      if (!canvas || !session) return
+
+      const { layerId, original, overlayImg, cropRect, fullW, fullH, originalClipPath } = session
+      const layer = getLayerById(layerId)
+
+      const cleanup = () => {
+        canvas.remove(overlayImg)
+        canvas.remove(cropRect)
+
+        original.visible = session.originalVisible
+        original.selectable = session.originalSelectable
+        original.evented = session.originalEvented
+        ;(original as any).clipPath = originalClipPath ?? undefined
+
+        cropSessionRef.current = null
+        setCropLayerId(null)
+        canvas.discardActiveObject()
+        canvas.requestRenderAll()
+      }
+
+      if (action === 'cancel') {
+        cleanup()
+        return
+      }
+
+      if (action === 'reset') {
+        // Reset crop rect to full image bounds
+        cropRect.set({
+          width: (overlayImg.scaleX || 1) * fullW,
+          height: (overlayImg.scaleY || 1) * fullH,
+          scaleX: 1,
+          scaleY: 1,
+          left: overlayImg.left,
+          top: overlayImg.top,
+          angle: overlayImg.angle || 0,
+        })
+        cropRect.setCoords()
+        canvas.setActiveObject(cropRect)
+        canvas.requestRenderAll()
+        return
+      }
+
+      if (!layer) {
+        cleanup()
+        return
+      }
+
+      // Compute crop in source pixels from cropRect + overlay transform
+      const angle = ((overlayImg.angle || 0) * Math.PI) / 180
+      const cos = Math.cos(angle)
+      const sin = Math.sin(angle)
+      const scaleX = overlayImg.scaleX || 1
+      const scaleY = overlayImg.scaleY || 1
+      const flipSignX = overlayImg.flipX ? -1 : 1
+      const flipSignY = overlayImg.flipY ? -1 : 1
+
+      const rectCenterX = cropRect.left || 0
+      const rectCenterY = cropRect.top || 0
+      const imgCenterX = overlayImg.left || 0
+      const imgCenterY = overlayImg.top || 0
+
+      const dx = rectCenterX - imgCenterX
+      const dy = rectCenterY - imgCenterY
+
+      // Invert rotation
+      const localScaledX = dx * cos + dy * sin
+      const localScaledY = -dx * sin + dy * cos
+
+      // Invert flips and scale
+      const localX = (localScaledX * flipSignX) / scaleX
+      const localY = (localScaledY * flipSignY) / scaleY
+
+      const cropW = Math.max(1, Math.round((cropRect.width || 1) / scaleX))
+      const cropH = Math.max(1, Math.round((cropRect.height || 1) / scaleY))
+
+      let cropX = Math.round(localX - cropW / 2 + fullW / 2)
+      let cropY = Math.round(localY - cropH / 2 + fullH / 2)
+
+      // Clamp to image bounds
+      cropX = Math.max(0, Math.min(fullW - cropW, cropX))
+      cropY = Math.max(0, Math.min(fullH - cropH, cropY))
+
+      onLayerUpdate(layerId, {
+        crop: { x: cropX, y: cropY, width: cropW, height: cropH },
+        x: rectCenterX,
+        y: rectCenterY,
+      })
+
+      cleanup()
+    },
+    [getLayerById, onLayerUpdate],
+  )
+
+  const startCrop = useCallback(
+    (layerId: string) => {
+      const canvas = fabricCanvasRef.current
+      if (!canvas) return
+      if (cropSessionRef.current) endCropSession('cancel')
+
+      const layer = getLayerById(layerId)
+      if (!layer) return
+
+      const original = layerObjectsRef.current.get(layerId)
+      if (!original) return
+
+      const el = original.getElement() as HTMLImageElement | null
+      const fullW = el?.naturalWidth || el?.width || original.width || 1
+      const fullH = el?.naturalHeight || el?.height || original.height || 1
+
+      const src = (original as any).getSrc?.() || (el as any)?.src || layer.imageUrl
+
+      fabric.Image.fromURL(
+        src,
+        (overlayImg) => {
+          if (!overlayImg) return
+
+          const originalClipPath = original.clipPath
+
+          overlayImg.set({
+            left: original.left,
+            top: original.top,
+            scaleX: original.scaleX,
+            scaleY: original.scaleY,
+            angle: original.angle,
+            opacity: original.opacity,
+            flipX: !!(original as any).flipX,
+            flipY: !!(original as any).flipY,
+            originX: 'center',
+            originY: 'center',
+            selectable: false,
+            evented: false,
+            objectCaching: false,
+            excludeFromExport: true,
+          })
+
+          // Hide the real layer while cropping
+          const originalVisible = original.visible
+          const originalSelectable = original.selectable
+          const originalEvented = original.evented
+          original.set({ visible: false, selectable: false, evented: false })
+          original.clipPath = undefined
+
+          // Start rect from existing crop (or full image)
+          const crop = layer.crop && layer.crop.width > 0 && layer.crop.height > 0 ? layer.crop : null
+          const cropX = crop ? crop.x : 0
+          const cropY = crop ? crop.y : 0
+          const cropW = crop ? crop.width : fullW
+          const cropH = crop ? crop.height : fullH
+
+          const localCenterX = -fullW / 2 + cropX + cropW / 2
+          const localCenterY = -fullH / 2 + cropY + cropH / 2
+
+          const angle = ((overlayImg.angle || 0) * Math.PI) / 180
+          const cos = Math.cos(angle)
+          const sin = Math.sin(angle)
+          const scaleX = overlayImg.scaleX || 1
+          const scaleY = overlayImg.scaleY || 1
+          const flipSignX = overlayImg.flipX ? -1 : 1
+          const flipSignY = overlayImg.flipY ? -1 : 1
+
+          const scaledX = localCenterX * scaleX * flipSignX
+          const scaledY = localCenterY * scaleY * flipSignY
+
+          const canvasDx = scaledX * cos - scaledY * sin
+          const canvasDy = scaledX * sin + scaledY * cos
+
+          const cropRect = new fabric.Rect({
+            left: (overlayImg.left || 0) + canvasDx,
+            top: (overlayImg.top || 0) + canvasDy,
+            originX: 'center',
+            originY: 'center',
+            angle: overlayImg.angle || 0,
+            width: cropW * scaleX,
+            height: cropH * scaleY,
+            fill: 'rgba(0,0,0,0.08)',
+            stroke: '#ef4444',
+            strokeWidth: 2,
+            transparentCorners: false,
+            cornerColor: '#ef4444',
+            borderColor: '#ef4444',
+            cornerSize: 10,
+            centeredScaling: false,
+            lockRotation: true,
+            hasRotatingPoint: false,
+            objectCaching: false,
+            excludeFromExport: true,
+          } as any)
+
+          const normalizeRectScale = () => {
+            const w = (cropRect.width || 1) * (cropRect.scaleX || 1)
+            const h = (cropRect.height || 1) * (cropRect.scaleY || 1)
+            cropRect.set({ width: w, height: h, scaleX: 1, scaleY: 1 })
+          }
+
+          const clampRect = () => {
+            const rectCenterX = cropRect.left || 0
+            const rectCenterY = cropRect.top || 0
+            const imgCenterX = overlayImg.left || 0
+            const imgCenterY = overlayImg.top || 0
+            const dx = rectCenterX - imgCenterX
+            const dy = rectCenterY - imgCenterY
+
+            const localScaledX = dx * cos + dy * sin
+            const localScaledY = -dx * sin + dy * cos
+            const localX = (localScaledX * flipSignX) / scaleX
+            const localY = (localScaledY * flipSignY) / scaleY
+
+            let nextCropW = Math.max(1, Math.round((cropRect.width || 1) / scaleX))
+            let nextCropH = Math.max(1, Math.round((cropRect.height || 1) / scaleY))
+
+            nextCropW = Math.min(fullW, nextCropW)
+            nextCropH = Math.min(fullH, nextCropH)
+
+            const minLocalX = -fullW / 2 + nextCropW / 2
+            const maxLocalX = fullW / 2 - nextCropW / 2
+            const minLocalY = -fullH / 2 + nextCropH / 2
+            const maxLocalY = fullH / 2 - nextCropH / 2
+
+            const clampedLocalX = Math.max(minLocalX, Math.min(maxLocalX, localX))
+            const clampedLocalY = Math.max(minLocalY, Math.min(maxLocalY, localY))
+
+            cropRect.set({ width: nextCropW * scaleX, height: nextCropH * scaleY })
+
+            const scaledX2 = clampedLocalX * scaleX * flipSignX
+            const scaledY2 = clampedLocalY * scaleY * flipSignY
+            const canvasDx2 = scaledX2 * cos - scaledY2 * sin
+            const canvasDy2 = scaledX2 * sin + scaledY2 * cos
+
+            cropRect.set({
+              left: imgCenterX + canvasDx2,
+              top: imgCenterY + canvasDy2,
+              angle: overlayImg.angle || 0,
+            })
+
+            cropRect.setCoords()
+          }
+
+          cropRect.on('scaling', () => {
+            normalizeRectScale()
+            clampRect()
+            canvas.requestRenderAll()
+          })
+          cropRect.on('moving', () => {
+            clampRect()
+            canvas.requestRenderAll()
+          })
+
+          cropSessionRef.current = {
+            layerId,
+            original,
+            originalVisible,
+            originalSelectable,
+            originalEvented,
+            originalClipPath,
+            overlayImg,
+            cropRect,
+            fullW,
+            fullH,
+          }
+          setCropLayerId(layerId)
+
+          canvas.add(overlayImg)
+          canvas.add(cropRect)
+          overlayImg.bringToFront()
+          cropRect.bringToFront()
+          canvas.setActiveObject(cropRect)
+          canvas.requestRenderAll()
+        },
+        { crossOrigin: 'anonymous' } as any,
+      )
+    },
+    [endCropSession, getLayerById],
+  )
 
   // Calculate canvas size based on container
   useEffect(() => {
@@ -166,9 +587,15 @@ function UVEditorCanvasInner({
   }, [])
 
   useEffect(() => {
-    if (!canvasRef.current) return
+    const mount = canvasMountRef.current
+    if (!mount) return
 
-    const canvas = new fabric.Canvas(canvasRef.current, {
+    // Let Fabric fully own its DOM (prevents React/Fabric insertBefore crashes).
+    mount.replaceChildren()
+    const el = document.createElement('canvas')
+    mount.appendChild(el)
+
+    const canvas = new fabric.Canvas(el, {
       width: canvasSize.width,
       height: canvasSize.height,
       backgroundColor: 'transparent',
@@ -176,6 +603,9 @@ function UVEditorCanvasInner({
     })
 
     fabricCanvasRef.current = canvas
+
+    // Ensure background image follows pan/zoom so it stays aligned with objects (base color + layers).
+    ;(canvas as any).backgroundVpt = true
 
     // Enable image smoothing for better quality rendering
     const ctx = canvas.getContext()
@@ -346,6 +776,7 @@ function UVEditorCanvasInner({
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
       canvas.dispose()
+      mount.replaceChildren()
     }
 
   }, [baseTextureUrl])
@@ -354,6 +785,9 @@ function UVEditorCanvasInner({
   useEffect(() => {
     const canvas = fabricCanvasRef.current
     if (!canvas) return
+
+    // Keep background aligned with objects during pan/zoom.
+    ;(canvas as any).backgroundVpt = true
 
     canvas.setDimensions({
       width: canvasSize.width,
@@ -407,7 +841,6 @@ function UVEditorCanvasInner({
     // Reapply masks after resize to match new overlay transform
     if (maskEnabled) {
       layerObjectsRef.current.forEach((img) => applyTemplateClip(img))
-      if (baseColorObjectRef.current) applyTemplateClip(baseColorObjectRef.current)
     }
 
     canvas.requestRenderAll()
@@ -619,50 +1052,30 @@ function UVEditorCanvasInner({
       return
     }
 
-    // Create processed template with base color replacing non-transparent pixels
-    const templateElement = template.getElement() as HTMLImageElement
+    const bg = canvas.backgroundImage as fabric.Image | undefined
+    if (!bg) return
+
+    // Create processed template (at source size) with base color replacing non-transparent pixels
+    const templateElement = (bg.getElement?.() as HTMLImageElement) || (template.getElement() as HTMLImageElement)
     if (!templateElement) return
 
-    // Create a canvas to process the template
+    const srcW = templateElement.naturalWidth || templateElement.width
+    const srcH = templateElement.naturalHeight || templateElement.height
+    if (!srcW || !srcH) return
+
     const processCanvas = document.createElement('canvas')
     const processCtx = processCanvas.getContext('2d')
     if (!processCtx) return
 
-    const canvasWidth = canvas.getWidth()
-    const canvasHeight = canvas.getHeight()
-
-    // Generate at higher resolution for smoother zoom
-    const dpr = window.devicePixelRatio || 1
-    processCanvas.width = canvasWidth * dpr
-    processCanvas.height = canvasHeight * dpr
-    processCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
-
-    // Draw template at its position with smoothing enabled
-    const tw = template.width || 1
-    const th = template.height || 1
-    const sx = template.scaleX || 1
-    const sy = template.scaleY || 1
-    const cx = template.left || 0  // center X
-    const cy = template.top || 0   // center Y
-
-    const drawW = tw * sx
-    const drawH = th * sy
-    const drawX = cx - drawW / 2  // top-left X
-    const drawY = cy - drawH / 2  // top-left Y
-
-    // Enable smoothing for smooth edges
+    processCanvas.width = srcW
+    processCanvas.height = srcH
     processCtx.imageSmoothingEnabled = true
     if ('imageSmoothingQuality' in processCtx) {
-      (processCtx as any).imageSmoothingQuality = 'high'
+      ;(processCtx as any).imageSmoothingQuality = 'high'
     }
+    processCtx.drawImage(templateElement, 0, 0, srcW, srcH)
 
-    processCtx.drawImage(templateElement, drawX, drawY, drawW, drawH)
-
-    // Get image data and replace non-transparent pixels with base color
-    const w = Math.round(canvasWidth * dpr)
-    const h = Math.round(canvasHeight * dpr)
-
-    const imageData = processCtx.getImageData(0, 0, w, h)
+    const imageData = processCtx.getImageData(0, 0, srcW, srcH)
     const data = imageData.data
 
     // Convert hex color to RGB (handle both 3 and 6 digit hex)
@@ -697,16 +1110,16 @@ function UVEditorCanvasInner({
       }
 
       baseColorImg.set({
-        left: 0,
-        top: 0,
-        scaleX: 1 / dpr,  // scale back down to canvas size
-        scaleY: 1 / dpr,
-        angle: 0,
+        originX: 'center',
+        originY: 'center',
+        left: bg.left,
+        top: bg.top,
+        scaleX: bg.scaleX,
+        scaleY: bg.scaleY,
+        angle: bg.angle || 0,
         selectable: false,
         evented: false,
         objectCaching: false,
-        originX: 'left',
-        originY: 'top',
       })
 
       canvas.add(baseColorImg)
@@ -715,7 +1128,7 @@ function UVEditorCanvasInner({
 
       canvas.requestRenderAll()
     })
-  }, [baseColor, baseTextureUrl])
+  }, [baseColor, baseTextureUrl, canvasSize.width, canvasSize.height])
 
   useEffect(() => {
     const canvas = fabricCanvasRef.current
@@ -733,6 +1146,7 @@ function UVEditorCanvasInner({
 
     // Add or update
     layers.forEach((layer) => {
+      const desiredSrcKey = `${layer.imageUrl}|${layer.recolor || ''}|${layer.totalRecolor ? '1' : '0'}`
       const existing = layerObjectsRef.current.get(layer.id)
       if (existing) {
         existing.set({
@@ -742,16 +1156,57 @@ function UVEditorCanvasInner({
           scaleY: layer.scaleY,
           angle: layer.rotation,
           opacity: layer.opacity,
+          flipX: !!layer.flipX,
+          flipY: !!layer.flipY,
+          centeredScaling: true,
           originX: 'center',
           originY: 'center',
           dirty: true,
           objectCaching: false,
         })
+        applyLayerCropToImageObject(existing, layer)
+        if ((existing as any)._srcKey !== desiredSrcKey) {
+          ;(async () => {
+            const nextSrc = layer.recolor
+              ? await recolorImageUrl(layer.imageUrl, layer.recolor, !!layer.totalRecolor)
+              : layer.imageUrl
+            ;(existing as any)._srcKey = desiredSrcKey
+            existing.setSrc(nextSrc, () => {
+              const latest = layersRef.current.find((l) => l.id === layer.id)
+              if (!latest) return
+
+              existing.set({
+                left: latest.x,
+                top: latest.y,
+                scaleX: latest.scaleX,
+                scaleY: latest.scaleY,
+                angle: latest.rotation,
+                opacity: latest.opacity,
+                flipX: !!latest.flipX,
+                flipY: !!latest.flipY,
+                centeredScaling: true,
+                originX: 'center',
+                originY: 'center',
+                dirty: true,
+                objectCaching: false,
+              })
+              applyLayerCropToImageObject(existing, latest)
+              existing.setCoords()
+              if (maskEnabled) applyTemplateClip(existing)
+              canvas.requestRenderAll()
+            }, { crossOrigin: 'anonymous' })
+          })()
+        }
         if (maskEnabled) applyTemplateClip(existing)
         return
       }
 
-      fabric.Image.fromURL(layer.imageUrl, (img) => {
+      ;(async () => {
+        const src = layer.recolor
+          ? await recolorImageUrl(layer.imageUrl, layer.recolor, !!layer.totalRecolor)
+          : layer.imageUrl
+
+        fabric.Image.fromURL(src, (img) => {
         if (!img) return
         img.set({
           left: layer.x,
@@ -760,12 +1215,17 @@ function UVEditorCanvasInner({
           scaleY: layer.scaleY,
           angle: layer.rotation,
           opacity: layer.opacity,
+          flipX: !!layer.flipX,
+          flipY: !!layer.flipY,
+          centeredScaling: true,
           originX: 'center',
           originY: 'center',
           dirty: true,
           objectCaching: false,
         })
+        applyLayerCropToImageObject(img, layer)
         ;(img as any).layerId = layer.id
+        ;(img as any)._srcKey = desiredSrcKey
 
         img.on('rotating', () => {
           // Snap rotation to nearest 10 degrees during rotation for real-time feedback
@@ -845,16 +1305,33 @@ function UVEditorCanvasInner({
         layerObjectsRef.current.set(layer.id, img)
         canvas.add(img)
 
+        if (pendingSelectLayerIdRef.current === layer.id) {
+          canvas.setActiveObject(img)
+          pendingSelectLayerIdRef.current = null
+        }
+
         // Ensure base color stays at the bottom
         baseColorObjectRef.current?.sendToBack()
         if (maskEnabled) applyTemplateClip(img)
 
         canvas.requestRenderAll()
       }, { crossOrigin: 'anonymous' })
+      })()
     })
 
     canvas.requestRenderAll()
-  }, [layers, onLayerUpdate, maskEnabled])
+  }, [layers, onLayerUpdate, maskEnabled, recolorImageUrl])
+
+  useEffect(() => {
+    if (!autoSelectLayerId) return
+    const canvas = fabricCanvasRef.current
+    if (!canvas) return
+    const obj = layerObjectsRef.current.get(autoSelectLayerId)
+    if (!obj) return
+    canvas.setActiveObject(obj)
+    canvas.requestRenderAll()
+    onAutoSelectLayerHandled?.()
+  }, [autoSelectLayerId, onAutoSelectLayerHandled])
 
   // Handle mask - apply/remove clipPath on all layers
   useEffect(() => {
@@ -870,18 +1347,29 @@ function UVEditorCanvasInner({
       }
     })
 
-    // Apply or remove mask on base color too
-    if (maskEnabled) {
-      if (baseColorObjectRef.current) applyTemplateClip(baseColorObjectRef.current)
-    } else {
-      if (baseColorObjectRef.current) baseColorObjectRef.current.clipPath = undefined
-    }
-
     canvas.requestRenderAll()
   }, [maskEnabled])
 
   // Helper function to add an image layer with auto-scaling
   const addImageLayer = useCallback(async (imageUrl: string) => {
+    const waitForImage = (img: HTMLImageElement) =>
+      new Promise<void>((resolve, reject) => {
+        const done = () => resolve()
+        const fail = () => reject(new Error('Failed to load image'))
+
+        img.onload = done
+        img.onerror = fail
+
+        // If cached, `complete` may be true before `onload` fires in some cases.
+        if (img.complete && (img.naturalWidth || img.width)) resolve()
+
+        // Prefer decode when available (more reliable for cached images)
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        img.decode?.().then(done).catch(() => {
+          // fall back to onload/onerror
+        })
+      })
+
     // Load both images to calculate dimensions
     const uploadedImg = new Image()
     const templateImg = new Image()
@@ -890,16 +1378,7 @@ function UVEditorCanvasInner({
     templateImg.src = baseTextureUrl
     
     // Wait for both images to load
-    await Promise.all([
-      new Promise((resolve) => {
-        uploadedImg.onload = resolve
-        if (uploadedImg.complete) resolve(undefined)
-      }),
-      new Promise((resolve) => {
-        templateImg.onload = resolve
-        if (templateImg.complete) resolve(undefined)
-      }),
-    ])
+    await Promise.all([waitForImage(uploadedImg), waitForImage(templateImg)])
     
     // Get real canvas dimensions
     const canvas = fabricCanvasRef.current
@@ -909,25 +1388,36 @@ function UVEditorCanvasInner({
     const canvasHeight = canvas.getHeight()
 
     // Calculate scale to make uploaded image 50% of template size
-    const templateWidth = templateImg.width
-    const templateHeight = templateImg.height
+    const templateWidth = templateImg.naturalWidth || templateImg.width
+    const templateHeight = templateImg.naturalHeight || templateImg.height
     const templateScale = Math.min(canvasWidth / templateWidth, canvasHeight / templateHeight)
 
     // Template's displayed size on canvas
     const templateDisplayWidth = templateWidth * templateScale
     const templateDisplayHeight = templateHeight * templateScale
 
-    // Target size: 50% of template display size
-    const targetWidth = templateDisplayWidth * 0.5
-    const targetHeight = templateDisplayHeight * 0.5
+    const uploadedWidth = uploadedImg.naturalWidth || uploadedImg.width
+    const uploadedHeight = uploadedImg.naturalHeight || uploadedImg.height
 
-    // Calculate scale to maintain aspect ratio - use the smaller scale so image fits within 50%
-    const uploadedWidth = uploadedImg.width
-    const uploadedHeight = uploadedImg.height
-    const scaleX = targetWidth / uploadedWidth
-    const scaleY = targetHeight / uploadedHeight
-    // Use the smaller scale to maintain aspect ratio and ensure image fits
-    const scale = Math.min(scaleX, scaleY)
+    const shouldKeepTemplateSize =
+      (uploadedWidth === templateWidth && uploadedHeight === templateHeight) ||
+      (uploadedWidth === 1024 && uploadedHeight === 1024)
+
+    let scale: number
+    if (shouldKeepTemplateSize) {
+      // Keep 1:1 pixel size in the exported 1024x1024 texture, while still fitting the editor canvas.
+      scale = templateScale
+    } else {
+      // Target size: 50% of template display size
+      const targetWidth = templateDisplayWidth * 0.5
+      const targetHeight = templateDisplayHeight * 0.5
+
+      // Calculate scale to maintain aspect ratio - use the smaller scale so image fits within 50%
+      const scaleX = targetWidth / uploadedWidth
+      const scaleY = targetHeight / uploadedHeight
+      // Use the smaller scale to maintain aspect ratio and ensure image fits
+      scale = Math.min(scaleX, scaleY)
+    }
 
     // Position at canvas center (objects use originX: 'center', originY: 'center')
     const x = canvasWidth / 2
@@ -942,17 +1432,56 @@ function UVEditorCanvasInner({
       scaleY: scale,
       rotation: 0,
       opacity: 1,
+      recolor: null,
+      totalRecolor: false,
+      flipX: false,
+      flipY: false,
+      crop: null,
     }
     onLayerAdd(newLayer)
   }, [baseTextureUrl, onLayerAdd])
+
+  const mirrorLayer = useCallback(
+    (layerId: string) => {
+      const layer = layers.find((l) => l.id === layerId)
+      if (!layer) return
+      pendingSelectLayerIdRef.current = layerId
+      onLayerUpdate(layerId, { flipX: !layer.flipX })
+    },
+    [layers, onLayerUpdate],
+  )
+
+  const selectLayer = useCallback((layerId: string) => {
+    const canvas = fabricCanvasRef.current
+    if (!canvas) return
+    const obj = layerObjectsRef.current.get(layerId)
+    if (!obj) {
+      pendingSelectLayerIdRef.current = layerId
+      selectedLayerIdRef.current = layerId
+      return
+    }
+    selectedLayerIdRef.current = layerId
+    canvas.setActiveObject(obj)
+    canvas.requestRenderAll()
+  }, [])
+
+  const getCanvasWidth = useCallback(() => {
+    const canvas = fabricCanvasRef.current
+    if (!canvas) return null
+    return canvas.getWidth()
+  }, [])
 
   useImperativeHandle(
     ref,
     () => ({
       exportImage,
       addImageLayer,
+      mirrorLayer,
+      startCrop,
+      selectLayer,
+      getCanvasWidth,
     }),
-    [exportImage, addImageLayer]
+    [exportImage, addImageLayer, mirrorLayer, startCrop, selectLayer, getCanvasWidth],
   )
 
   // Handle drag and drop
@@ -1038,15 +1567,83 @@ function UVEditorCanvasInner({
         return
       }
 
+      if (cropSessionRef.current) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          endCropSession('cancel')
+          return
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          endCropSession('apply')
+          return
+        }
+      }
+
+      const isMod = e.ctrlKey || e.metaKey
+      const key = e.key.toLowerCase()
+
+      if (isMod && (key === 'c' || key === 'x')) {
+        const canvas = fabricCanvasRef.current
+        if (!canvas) return
+
+        const activeObject = canvas.getActiveObject()
+        const layerId = activeObject && (activeObject as any).layerId
+        if (!layerId) return
+
+        const layer = layers.find((l) => l.id === layerId)
+        if (!layer) return
+
+        e.preventDefault()
+        layerClipboardRef.current = { ...layer }
+        if (key === 'x') {
+          onLayerDelete(layerId)
+          canvas.discardActiveObject()
+          canvas.renderAll()
+        }
+        return
+      }
+
+      if (isMod && key === 'v') {
+        const canvas = fabricCanvasRef.current
+        if (!canvas) return
+        if (!layerClipboardRef.current) return
+
+        e.preventDefault()
+        const src = layerClipboardRef.current
+        const newLayer: Layer = {
+          ...src,
+          id: `layer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          x: (src.x || 0) + 20,
+          y: (src.y || 0) + 20,
+        }
+        pendingSelectLayerIdRef.current = newLayer.id
+        onLayerAdd(newLayer)
+        return
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const canvas = fabricCanvasRef.current
         if (!canvas) return
 
         const activeObject = canvas.getActiveObject()
-        if (activeObject && (activeObject as any).layerId) {
+        const layerIds: string[] = []
+
+        if (activeObject && (activeObject as any).type === 'activeSelection') {
+          const objects = ((activeObject as any)._objects || []) as any[]
+          objects.forEach((o) => {
+            if (o?.layerId) layerIds.push(o.layerId)
+          })
+        } else if (activeObject && (activeObject as any).layerId) {
+          layerIds.push((activeObject as any).layerId)
+        } else if (selectedLayerIdRef.current) {
+          layerIds.push(selectedLayerIdRef.current)
+        }
+
+        const unique = Array.from(new Set(layerIds)).filter(Boolean)
+        if (unique.length > 0) {
           e.preventDefault()
-          const layerId = (activeObject as any).layerId
-          onLayerDelete(layerId)
+          unique.forEach((id) => onLayerDelete(id))
           canvas.discardActiveObject()
           canvas.renderAll()
         }
@@ -1057,7 +1654,7 @@ function UVEditorCanvasInner({
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [onLayerDelete])
+  }, [layers, onLayerAdd, onLayerDelete])
 
 
   return (
@@ -1068,16 +1665,41 @@ function UVEditorCanvasInner({
           isDragging ? 'border-[#3a3a3a] bg-[#ededed]/[0.12]' : 'border-[#2a2a2a]'
         }`}
       >
-        <canvas
-          ref={canvasRef}
+        <div
+          ref={canvasMountRef}
           style={{
             width: `${canvasSize.width}px`,
             height: `${canvasSize.height}px`,
             maxWidth: '100%',
             maxHeight: '100%',
-            imageRendering: 'auto'
           }}
         />
+
+        {cropLayerId && (
+          <div className="absolute top-2 right-2 z-30 flex items-center gap-2 bg-[#1a1a1a]/95 border border-[#2a2a2a] rounded px-2 py-1.5 backdrop-blur-sm">
+            <div className="hidden sm:block text-xs text-[#a0a0a0] font-light pr-2 border-r border-[#2a2a2a]">
+              Crop mode (drag/resize) • Enter=Apply • Esc=Cancel
+            </div>
+            <button
+              onClick={() => endCropSession('reset')}
+              className="px-2 py-1 text-xs text-[#a0a0a0] hover:text-[#ededed] rounded border border-[#2a2a2a] bg-[#ededed]/[0.08] hover:bg-[#ededed]/[0.12] transition-all"
+            >
+              Reset
+            </button>
+            <button
+              onClick={() => endCropSession('cancel')}
+              className="px-2 py-1 text-xs text-[#a0a0a0] hover:text-[#ededed] rounded border border-[#2a2a2a] bg-[#ededed]/[0.08] hover:bg-[#ededed]/[0.12] transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => endCropSession('apply')}
+              className="px-2 py-1 text-xs font-medium text-[#1a1a1a] rounded border border-[#ededed] bg-[#ededed] hover:bg-[#ededed]/90 transition-all"
+            >
+              Apply
+            </button>
+          </div>
+        )}
         {isDragging && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#ededed]/[0.12] border-2 border-dashed border-[#3a3a3a] rounded pointer-events-none">
             <div className="text-[#ededed] font-medium text-sm">Drop image here</div>

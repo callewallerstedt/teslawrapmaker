@@ -120,17 +120,49 @@ export async function getCarModel(id: string): Promise<CarModel | null> {
   return models.find((m) => m.id === id) || null
 }
 
-export async function getWraps(): Promise<Wrap[]> {
+export type WrapSort = 'most-liked' | 'latest'
+
+export async function getWraps(options?: {
+  limit?: number
+  offset?: number
+  sort?: WrapSort
+  searchQuery?: string
+  carModelId?: string
+}): Promise<Wrap[]> {
   // Supabase implementation
   try {
     // Use admin client if available for consistent reads with likes updates
     const client = supabaseAdmin || supabase
 
-    const { data, error } = await client
+    const limit = options?.limit
+    const offset = options?.offset ?? 0
+    const sort: WrapSort = options?.sort ?? 'most-liked'
+
+    let query = client
       .from('wraps')
       .select('id, author_id, car_model_id, texture_url, preview_render_url, title, description, username, likes, created_at')
-      .order('likes', { ascending: false })
-      .order('created_at', { ascending: false })
+
+    if (options?.carModelId) {
+      query = query.eq('car_model_id', options.carModelId)
+    }
+
+    if (options?.searchQuery) {
+      const q = options.searchQuery
+      // Search across title, username, and description
+      query = query.or(`title.ilike.%${q}%,username.ilike.%${q}%,description.ilike.%${q}%`)
+    }
+
+    if (sort === 'latest') {
+      query = query.order('created_at', { ascending: false }).order('likes', { ascending: false })
+    } else {
+      query = query.order('likes', { ascending: false }).order('created_at', { ascending: false })
+    }
+
+    if (typeof limit === 'number') {
+      query = query.range(offset, offset + limit - 1)
+    }
+
+    const { data, error } = await query
 
     if (error) {
       console.error('Error fetching wraps:', error)
