@@ -39,7 +39,7 @@ export default function Navigation({ currentPath = '/' }: NavigationProps) {
           </Link>
 
           <form
-            className="absolute left-1/2 transform -translate-x-1/2 max-w-xl w-full sm:w-96"
+            className="w-full sm:absolute sm:left-1/2 sm:transform sm:-translate-x-1/2 max-w-xl sm:w-96"
             onSubmit={(e) => {
               e.preventDefault()
               const q = query.trim()
@@ -83,7 +83,7 @@ export default function Navigation({ currentPath = '/' }: NavigationProps) {
           </form>
 
           {/* Navigation Tabs */}
-          <div className="flex w-full sm:w-auto gap-0 ml-auto">
+          <div className="flex w-full sm:w-auto gap-0 sm:ml-auto">
             <Link
               href="/explore"
               className={`flex-1 sm:flex-none text-center px-3 sm:px-4 py-2 text-sm font-medium transition-all ${
