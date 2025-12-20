@@ -71,6 +71,24 @@ export default async function WrapPage({ params }: { params: { id: string } }) {
   }
 
   const carModel = await getCarModel(wrap.carModelId)
+  const siteBase =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+    'https://www.evwrapstudio.com/'
+  const canonical = new URL(`/wrap/${wrap.id}`, siteBase).toString()
+  const imageUrl = new URL(`/api/og/wrap/${wrap.id}`, siteBase).toString()
+  const structuredData = {
+    '@context': 'https://schema.org',
+    '@type': 'CreativeWork',
+    name: wrap.title,
+    description:
+      wrap.description ||
+      `A custom Tesla wrap${carModel?.name ? ` for ${carModel.name}` : ''}${wrap.username ? ` by ${wrap.username}` : ''}.`,
+    image: imageUrl,
+    url: canonical,
+    datePublished: wrap.createdAt,
+    creator: wrap.username ? { '@type': 'Person', name: wrap.username } : undefined,
+  }
 
   return (
     <div className="min-h-screen bg-[#1a1a1a] relative">
@@ -78,6 +96,11 @@ export default async function WrapPage({ params }: { params: { id: string } }) {
       <Navigation currentPath="/explore" />
 
       <main className="relative z-10 max-w-7xl mx-auto px-3 sm:px-5 lg:px-6 py-8">
+        <script
+          type="application/ld+json"
+          // eslint-disable-next-line react/no-danger
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+        />
         <WrapPageClient
           wrap={wrap}
           carModelName={carModel?.name || wrap.carModelId}
